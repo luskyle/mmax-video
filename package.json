@@ -1,6 +1,6 @@
 {
   "name": "mmax-video",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "本地 MiniMax H3 桌面视频工作室",
   "main": "src/main.js",
@@ -11,9 +11,10 @@
     "start": "electron .",
     "install:electron": "node node_modules/electron/install.js",
     "test": "node --test",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/workspace.js && node --input-type=module --check < src/renderer.js && node --check src/canvas.mjs && node --check src/settings.js && node --check scripts/package-linux.mjs && node --check scripts/smoke.mjs",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/workspace.js && node --input-type=module --check < src/renderer.js && node --check src/canvas.mjs && node --check src/settings.js && node --check scripts/package-linux.mjs && node --check scripts/smoke.mjs && node --check scripts/verify-deb.mjs",
     "package:linux": "npm run install:electron && node scripts/package-linux.mjs",
-    "test:smoke": "node scripts/smoke.mjs"
+    "test:smoke": "node scripts/smoke.mjs",
+    "test:deb": "node scripts/verify-deb.mjs"
   },
   "devDependencies": {
     "electron": "^45.4.1",

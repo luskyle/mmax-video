@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('This release target requires Linux x64.');
-if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) throw new Error('Invalid release version.');
+if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) throw new Error('Debian release version must be numeric major.minor.patch.');
 const name = `mmax-video-studio-${manifest.version}-linux-x64`;
 const dist = path.join(root, 'dist');
 const destination = path.join(dist, name);
@@ -32,7 +32,40 @@ fs.chmodSync(path.join(destination, 'mmax-video-studio'), 0o755);
 
 const archive = path.join(dist, `${name}.tar.gz`);
 execFileSync('tar', ['--sort=name', '--owner=0', '--group=0', '--numeric-owner', '-czf', archive, '-C', dist, name], { stdio: 'inherit' });
-const hash = createHash('sha256');
-for await (const chunk of fs.createReadStream(archive)) hash.update(chunk);
-fs.writeFileSync(path.join(dist, 'SHA256SUMS'), `${hash.digest('hex')}  ${path.basename(archive)}\n`);
-console.log(`Packaged ${archive}`);
+const stage = path.join(dist, `${name}-deb-stage`);
+const deb = path.join(dist, `mmax-video-studio_${manifest.version}_amd64.deb`);
+fs.rmSync(stage, { recursive: true, force: true });
+try {
+  const control = path.join(stage, 'DEBIAN');
+  const binaryDir = path.join(stage, 'usr/bin');
+  const installDir = path.join(stage, 'opt/mmax-video-studio');
+  fs.mkdirSync(control, { recursive: true });
+  fs.mkdirSync(binaryDir, { recursive: true });
+  fs.cpSync(destination, installDir, { recursive: true });
+  fs.symlinkSync('/opt/mmax-video-studio/mmax-video-studio', path.join(binaryDir, 'mmax-video-studio'));
+  fs.writeFileSync(path.join(control, 'control'), [
+    'Package: mmax-video-studio',
+    `Version: ${manifest.version}`,
+    'Section: video',
+    'Priority: optional',
+    'Architecture: amd64',
+    'Maintainer: MMax Video Studio contributors <844804539@qq.com>',
+    'Homepage: https://github.com/luskyle/mmax-video',
+    'Depends: libasound2t64 | libasound2, libatk-bridge2.0-0t64 | libatk-bridge2.0-0, libatk1.0-0t64 | libatk1.0-0, libatspi2.0-0t64 | libatspi2.0-0, libc6 (>= 2.35), libcairo2, libcups2t64 | libcups2, libdbus-1-3, libexpat1, libgbm1, libglib2.0-0t64 | libglib2.0-0, libgtk-3-0t64 | libgtk-3-0, libnspr4, libnss3, libpango-1.0-0, libudev1, libx11-6, libxcb1, libxcomposite1, libxdamage1, libxext6, libxfixes3, libxkbcommon0, libxrandr2',
+    'Description: Local MiniMax H3 video creation studio',
+    ' Electron desktop application with an interactive video canvas.',
+    ' MiniMax, CUDA and FFmpeg must be installed separately.',
+    ''
+  ].join('\n'));
+  execFileSync('dpkg-deb', ['--root-owner-group', '--build', stage, deb], { stdio: 'inherit' });
+} finally {
+  fs.rmSync(stage, { recursive: true, force: true });
+}
+const checksums = [];
+for (const file of [archive, deb]) {
+  const hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  checksums.push(`${hash.digest('hex')}  ${path.basename(file)}`);
+}
+fs.writeFileSync(path.join(dist, 'SHA256SUMS'), checksums.join('\n') + '\n');
+console.log(`Packaged ${archive} and ${deb}`);

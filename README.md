@@ -10,7 +10,7 @@
 
 [项目展示](https://luskyle.github.io/mmax-video/) ·
 [下载最新版](https://github.com/luskyle/mmax-video/releases/latest) ·
-[版本说明](docs/releases/v1.0.0.md)
+[版本说明](docs/releases/v1.0.1.md)
 
 > 当前支持 **Linux x64 桌面环境**。MiniMax 模型、推理器、CUDA 和 FFmpeg 需另行部署，
 > 不包含在安装包中；GitHub Pages 是展示网站，不能在网页上执行本地 GPU 推理。
@@ -42,13 +42,22 @@
 
 ### Linux x64 发布包
 
-在 [Releases](https://github.com/luskyle/mmax-video/releases/latest) 下载应用压缩包和 `SHA256SUMS`，
-放到同一目录中。以 v1.0.0 为例：
+在 [Releases](https://github.com/luskyle/mmax-video/releases/latest) 下载所需格式及 `SHA256SUMS`。
+Debian / Ubuntu 推荐使用 deb 包，安装时会由 apt 处理系统依赖。以 v1.0.1 为例：
 
 ```bash
-sha256sum --check SHA256SUMS
-tar -xzf mmax-video-studio-1.0.0-linux-x64.tar.gz
-cd mmax-video-studio-1.0.0-linux-x64
+sha256sum --ignore-missing --check SHA256SUMS
+sudo apt install ./mmax-video-studio_1.0.1_amd64.deb
+mmax-video-studio
+```
+
+卸载使用 `sudo apt remove mmax-video-studio`。deb 不创建应用菜单图标，工作区和用户配置不会随卸载删除。
+也可以下载免安装压缩包：
+
+```bash
+sha256sum --ignore-missing --check SHA256SUMS
+tar -xzf mmax-video-studio-1.0.1-linux-x64.tar.gz
+cd mmax-video-studio-1.0.1-linux-x64
 ./mmax-video-studio
 ```
 
@@ -68,7 +77,7 @@ npm run install:electron
 npm start
 ```
 
-也可以运行 `bash run.sh`；已有指向该脚本的 Linux 应用菜单快捷方式仍然可用。
+也可以运行 `bash run.sh`。
 
 Electron 下载受网络影响时可使用
 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm run install:electron`。
@@ -133,12 +142,14 @@ npm run check
 npm test
 npm run package:linux
 npm run test:smoke
+npm run test:deb
 ```
 
 `package:linux` 只在 Linux x64 上运行，将应用、Electron 运行时、第三方许可和说明文档打包到 `dist/`，
-并生成 SHA-256 校验文件；不会打包工作区、模型、用户配置或依赖开发工具。
+同时生成 `.tar.gz`、`.deb` 和 SHA-256 校验文件；不会打包工作区、模型、用户配置或依赖开发工具。
 `test:smoke` 启动打包后的真实应用，使用独立临时工作区验证画布、缩放、拖拽、草稿和设置页面，
-不会触发 GPU 推理。无图形会话时使用 `xvfb-run -a npm run test:smoke`。
+不会触发 GPU 推理。`test:deb` 在隔离目录测试 dpkg 安装、启动和卸载，不修改系统软件包。
+无图形会话时分别使用 `xvfb-run -a npm run test:smoke` 和 `xvfb-run -a npm run test:deb`。
 
 ## CI / CD 与 GitHub Pages
 

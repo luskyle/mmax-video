@@ -9,7 +9,7 @@ import workspaceApi from '../src/workspace.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-const binary = path.join(root, `dist/mmax-video-studio-${version}-linux-x64/mmax-video-studio`);
+const binary = process.env.MMAX_SMOKE_BINARY || path.join(root, `dist/mmax-video-studio-${version}-linux-x64/mmax-video-studio`);
 if (!fs.existsSync(binary)) throw new Error('Run npm run package:linux before the smoke test.');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'mmax-release-smoke-'));
 const config = path.join(temporary, 'config');

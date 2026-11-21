@@ -47,6 +47,7 @@ jobs:
       - run: npm ci
       - run: npm run package:linux
       - run: xvfb-run -a npm run test:smoke
+      - run: xvfb-run -a npm run test:deb
       - run: sha256sum --check SHA256SUMS
         working-directory: dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -54,6 +55,7 @@ jobs:
           name: linux-x64
           path: |
             dist/*.tar.gz
+            dist/*.deb
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
