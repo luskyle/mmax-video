@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' file:; img-src 'self' data:">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MMax Video</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div><div class="brand"><span class="brand-icon">M</span> MMax Video <span class="badge">LOCAL STUDIO</span></div><p>本地视频创作工作台</p></div>
+    <div class="header-actions"><button id="open-workspace" class="secondary">打开工作区</button><button id="new-workspace" class="secondary">＋ 新建工作区</button></div>
+  </header>
+  <main>
+    <aside class="card">
+      <div class="section-label">WORKSPACE</div>
+      <h2 id="workspace-name">尚未选择工作区</h2>
+      <p class="muted" id="workspace-path">创建或打开一个工作区，开始创作。</p>
+      <div class="divider"></div>
+      <div class="section-label">HISTORY</div>
+      <div class="history-heading"><h3>生成记录</h3><span id="job-count">0</span></div>
+      <div id="history" class="history"><p class="muted">生成的视频会显示在这里。</p></div>
+    </aside>
+    <section class="content">
+      <div class="intro"><div><div class="section-label">CREATE VIDEO</div><h1>让想象动起来<span>.</span></h1><p class="muted">输入画面、动作和声音描述，在本机生成视频。</p></div><div class="engine"><i></i> CUDA · HyperFlow 6 步</div></div>
+      <div id="notice" class="notice hidden" role="status"></div>
+      <div class="card form">
+        <div class="title-row"><div><h2>创作描述</h2><p class="muted">推荐使用英文，描述主体、场景、运动和声音。</p></div><span class="tag">TEXT TO VIDEO</span></div>
+        <label for="prompt">提示词</label>
+        <textarea id="prompt" maxlength="4000" placeholder="例如：A giant panda walks through a lush bamboo forest after rain..."></textarea>
+        <div class="prompt-footer"><span>画面越具体，结果通常越可控</span><span id="prompt-count">0 / 4000</span></div>
+        <div class="divider"></div>
+        <div class="title-row"><div><h2>生成设置</h2><p class="muted">设置将保存在当前工作区。</p></div><span class="tag">5 秒 · 24 FPS</span></div>
+        <div class="settings">
+          <div><label for="preset">视频尺寸</label><select id="preset"><option value="640x384">640 × 384 · 快速</option><option value="960x544">960 × 544 · 清晰</option><option value="1088x608">1088 × 608 · 高清</option><option value="custom">自定义</option></select></div>
+          <div><label for="width">宽度</label><input id="width" type="number" min="256" max="1920" step="32" value="640"></div>
+          <div><label for="height">高度</label><input id="height" type="number" min="256" max="1920" step="32" value="384"></div>
+          <div><label for="seed">种子</label><input id="seed" type="number" min="-1" max="2147483647" value="-1"></div>
+        </div>
+        <p class="hint">宽高须为 32 的倍数；-1 表示随机。高分辨率耗时更长，可能超出显存。</p>
+        <div class="bottom-actions"><button id="save-settings" class="secondary">保存默认设置</button><button id="generate" class="primary">✦ 开始生成</button></div>
+      </div>
+      <div class="card result">
+        <div class="title-row"><div><div class="section-label">OUTPUT</div><h2>视频预览</h2></div><div class="result-actions"><button id="show-video" class="secondary small" disabled>显示文件</button><button id="show-log" class="secondary small" disabled>查看日志位置</button></div></div>
+        <div id="preview-empty" class="preview-empty"><div class="play-icon">▶</div><strong>你的作品将出现在这里</strong><span>生成完成后，可在此播放或在工作区查看文件。</span></div>
+        <video id="preview" controls class="hidden"></video>
+        <div id="job-detail" class="job-detail hidden"></div>
+      </div>
+    </section>
+  </main>
+  <dialog id="create-dialog"><form method="dialog"><h2>新建工作区</h2><p class="muted">输入名称后选择父目录，应用会创建新的工作区文件夹。</p><label for="workspace-input">工作区名称</label><input id="workspace-input" maxlength="100" placeholder="例如：我的视频"><div class="dialog-actions"><button value="cancel" class="secondary">取消</button><button id="create-confirm" value="default" class="primary">选择父目录</button></div></form></dialog>
+  <script src="renderer.js"></script>
+</body>
+</html>

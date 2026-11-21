@@ -1,0 +1,14 @@
+{
+  "name": "mmax-video",
+  "version": "1.0.0",
+  "private": true,
+  "description": "本地 MiniMax H3 桌面视频工作室",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "^37.10.3"
+  }
+}
