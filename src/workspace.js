@@ -7,7 +7,8 @@ const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
 const MARKER = '.mmax-workspace.json';
-const DEFAULTS = { width: 640, height: 384, seed: -1 };
+const DEFAULTS = { width: 640, height: 384, seed: -1, duration: 5, format: 'webm', audio: true };
+const FPS = 24;
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function writeJson(file, value) {
@@ -30,7 +31,15 @@ function validateSettings(settings) {
   if (!Number.isInteger(settings.seed) || settings.seed < -1 || settings.seed > 2147483647) {
     throw new Error('种子必须是 -1 或 0 到 2147483647 之间的整数。');
   }
-  return { width: settings.width, height: settings.height, seed: settings.seed };
+  const { duration = DEFAULTS.duration, format = DEFAULTS.format, audio = DEFAULTS.audio } = settings;
+  if (![5, 10, 15].includes(duration)) throw new Error('视频时长必须为 5、10 或 15 秒。');
+  if (!['webm', 'mp4'].includes(format)) throw new Error('视频格式必须为 WebM 或 MP4。');
+  if (typeof audio !== 'boolean') throw new Error('音频设置无效。');
+  return { width: settings.width, height: settings.height, seed: settings.seed, duration, format, audio };
+}
+
+function framesForDuration(duration) {
+  return Math.ceil((duration * FPS - 5) / 17) * 17 + 5;
 }
 
 function validatePrompt(prompt) {
@@ -38,6 +47,39 @@ function validatePrompt(prompt) {
     throw new Error('请输入 1 到 4000 个字符的提示词。');
   }
   return prompt.trim();
+}
+
+function inspectModelRoot(modelRoot) {
+  let root;
+  try {
+    root = fs.realpathSync(modelRoot);
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+      return { root: modelRoot, files: {}, missing: [modelRoot] };
+    }
+    throw error;
+  }
+  const files = {
+    script: path.join(root, 'generate.sh'),
+    model: path.join(root, 'models/diffusion_models/minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf'),
+    ffmpeg: path.join(root, 'build-deps/root/usr/bin/ffmpeg')
+  };
+  const missing = [];
+  for (const file of Object.values(files)) {
+    try {
+      if (!fs.statSync(file).isFile()) missing.push(file);
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') missing.push(file);
+      else throw error;
+    }
+  }
+  return { root, files, missing };
+}
+
+function modelFiles(modelRoot) {
+  const status = inspectModelRoot(modelRoot);
+  if (status.missing.length) throw new Error(`缺少运行文件：${status.missing.join('、')}`);
+  return { root: status.root, ...status.files };
 }
 
 function assertOutsideModel(root, modelRoot) {
@@ -51,7 +93,7 @@ function workspaceAt(root, modelRoot) {
   root = fs.realpathSync(root);
   assertOutsideModel(root, modelRoot);
   const marker = readJson(path.join(root, MARKER));
-  if (marker.version !== 1 || typeof marker.name !== 'string') throw new Error('不是有效的 MMax Video 工作区。');
+  if (marker.version !== 1 || typeof marker.name !== 'string') throw new Error('不是有效的 MMax Video Studio 工作区。');
   const settings = validateSettings(marker.settings);
   const jobsDir = path.join(root, 'jobs');
   if (!fs.statSync(jobsDir).isDirectory() || path.dirname(fs.realpathSync(jobsDir)) !== root) {
@@ -93,7 +135,11 @@ function jobDir(workspace, id) {
 function loadJobs(workspace) {
   return fs.readdirSync(path.join(workspace.root, 'jobs'), { withFileTypes: true })
     .filter(entry => entry.isDirectory() && ID.test(entry.name))
-    .map(entry => readJson(path.join(jobDir(workspace, entry.name), 'job.json')))
+    .map(entry => {
+      const job = readJson(path.join(jobDir(workspace, entry.name), 'job.json'));
+      if (job.id !== entry.name) throw new Error('任务编号与目录不一致。');
+      return { ...job, ...validateSettings(job) };
+    })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -101,7 +147,7 @@ function processStillRunning(job, dir) {
   if (!Number.isInteger(job.pid) || job.pid <= 0) return false;
   try {
     const args = fs.readFileSync(`/proc/${job.pid}/cmdline`, 'utf8').split('\0');
-    return args.includes(path.join(dir, 'original.webm')) || args.includes(path.join(dir, 'video.webm'));
+    return args.includes(path.join(dir, 'original.webm')) || args.includes(path.join(dir, videoFilename(job)));
   } catch (error) {
     if (error.code === 'ENOENT' || error.code === 'ESRCH') return false;
     throw error;
@@ -121,13 +167,32 @@ function reconcileJobs(workspace) {
   }
 }
 
-function videoUrl(workspace, id) {
+function videoFilename(job) {
+  const { format } = validateSettings(job);
+  return `video.${format}`;
+}
+
+function jobFile(workspace, id, type) {
+  if (!['video', 'log'].includes(type)) throw new Error('无效的文件类型。');
   const dir = jobDir(workspace, id);
   const job = readJson(path.join(dir, 'job.json'));
-  if (job.id !== id || job.status !== 'completed') throw new Error('该任务没有可播放的视频。');
-  const file = path.join(dir, 'video.webm');
-  if (path.dirname(fs.realpathSync(file)) !== fs.realpathSync(dir)) throw new Error('视频路径无效。');
-  return pathToFileURL(file).href;
+  if (job.id !== id) throw new Error('任务编号与目录不一致。');
+  if (type === 'video' && job.status !== 'completed') throw new Error('该任务没有可播放的视频。');
+  const file = path.join(dir, type === 'video' ? videoFilename(job) : 'generation.log');
+  if (path.dirname(fs.realpathSync(file)) !== fs.realpathSync(dir)) throw new Error('任务文件路径无效。');
+  return file;
+}
+
+function videoUrl(workspace, id) {
+  return pathToFileURL(jobFile(workspace, id, 'video')).href;
+}
+
+function deleteJob(workspace, id) {
+  const dir = jobDir(workspace, id);
+  const job = readJson(path.join(dir, 'job.json'));
+  if (job.id !== id) throw new Error('任务编号与目录不一致。');
+  if (job.status === 'running') throw new Error('画面正在生成，不能删除。');
+  fs.rmSync(dir, { recursive: true });
 }
 
 function runProcess(command, args, options, log, onOutput, onPid) {
@@ -174,16 +239,14 @@ class Generator {
     }
     prompt = validatePrompt(prompt);
     const settings = validateSettings(input);
-    const script = path.join(this.modelRoot, 'generate.sh');
-    const model = path.join(this.modelRoot, 'models/diffusion_models/minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf');
-    const ffmpeg = path.join(this.modelRoot, 'build-deps/root/usr/bin/ffmpeg');
-    for (const file of [script, model, ffmpeg]) {
-      if (!fs.existsSync(file)) throw new Error(`缺少运行文件：${file}`);
-    }
+    const { script, model, ffmpeg } = modelFiles(this.modelRoot);
     const id = crypto.randomUUID();
     const dir = jobDir(workspace, id);
     fs.mkdirSync(dir);
-    const job = { id, prompt, ...settings, status: 'running', phase: '启动中', createdAt: new Date().toISOString() };
+    const job = {
+      id, prompt, ...settings, frames: framesForDuration(settings.duration), fps: FPS,
+      status: 'running', stage: 'preparing', samplingStep: 0, phase: '加载模型与提示词', createdAt: new Date().toISOString()
+    };
     writeJson(path.join(dir, 'job.json'), job);
     this.active = true;
     this.execute(workspace, job, dir, script, model, ffmpeg).catch(error => {
@@ -202,38 +265,62 @@ class Generator {
     const setPid = pid => { job.pid = pid || null; update(); };
     let buffer = '';
     const onOutput = text => {
+      if (job.stage === 'decoding') return;
       buffer = (buffer + text).slice(-4096);
       let phase = job.phase;
-      if (buffer.includes('sampling completed')) phase = '解码视频和音频';
+      let stage = job.stage;
+      let samplingStep = job.samplingStep;
+      if (buffer.includes('sampling completed')) {
+        phase = '解码视频和音频';
+        stage = 'decoding';
+        samplingStep = 6;
+      }
       else {
-        const matches = [...buffer.matchAll(/\|\s*\d+\/6\s*-/g)];
-        if (matches.length) phase = `采样 ${matches.at(-1)[0].match(/\d+\/6/)[0]}`;
+        const matches = [...buffer.matchAll(/\|\s*(\d+)\/6\s*-\s*[\d.]+\s*(?:s\/it|it\/s)/g)];
+        if (matches.length && stage !== 'decoding') {
+          samplingStep = Math.min(6, Math.max(samplingStep, ...matches.map(match => Number(match[1]))));
+          phase = `采样 ${samplingStep}/6`;
+          stage = 'sampling';
+        }
         else if (buffer.includes('generate_video ')) phase = '准备采样';
       }
-      if (phase !== job.phase) { job.phase = phase; update(); }
+      if (phase !== job.phase || stage !== job.stage || samplingStep !== job.samplingStep) {
+        Object.assign(job, { phase, stage, samplingStep });
+        update();
+      }
     };
     const raw = path.join(dir, 'original.webm');
-    const final = path.join(dir, 'video.webm');
+    const final = path.join(dir, videoFilename(job));
     try {
       const env = { ...process.env, MINIMAX_H3_BACKEND: 'cuda', MINIMAX_H3_DIFFUSION_MODEL: model, TMPDIR: dir };
       await runProcess('bash', [script, job.prompt, raw, '--width', String(job.width), '--height', String(job.height),
+        '--video-frames', String(job.frames), '--fps', String(FPS),
         '--seed', String(job.seed), '--steps', '6', '--sampling-method', 'euler', '--sigmas', 'hyperflow-h3-flash-6'],
       { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] }, log, onOutput, setPid);
       if (logError) throw logError;
       if (!fs.existsSync(raw) || fs.statSync(raw).size === 0) throw new Error('推理结束但没有生成视频。');
-      job.phase = '转换音频以便播放';
+      job.phase = `导出 ${job.format.toUpperCase()}${job.audio ? '（含声音）' : '（仅画面）'}`;
+      job.stage = 'encoding';
       update();
       const libs = path.join(this.modelRoot, 'build-deps/root/usr/lib/x86_64-linux-gnu');
       const ffenv = { ...process.env, LD_LIBRARY_PATH: [libs, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':'), TMPDIR: dir };
-      await runProcess(ffmpeg, ['-v', 'error', '-n', '-i', raw, '-map', '0:v:0', '-map', '0:a:0',
-        '-c:v', 'copy', '-c:a', 'libopus', '-b:a', '128k', final],
+      const videoArgs = job.format === 'mp4'
+        ? ['-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
+        : ['-c:v', 'copy'];
+      const audioArgs = job.audio
+        ? ['-map', '0:a:0', '-c:a', job.format === 'mp4' ? 'aac' : 'libopus', '-b:a', '128k']
+        : ['-an'];
+      await runProcess(ffmpeg, ['-v', 'error', '-n', '-i', raw, '-t', String(job.duration),
+        '-map', '0:v:0', ...videoArgs, ...audioArgs, final],
       { cwd: dir, env: ffenv, stdio: ['ignore', 'pipe', 'pipe'] }, log, () => {}, setPid);
       if (logError) throw logError;
-      if (!fs.existsSync(final) || fs.statSync(final).size === 0) throw new Error('音频转换后没有生成视频。');
+      if (!fs.existsSync(final) || fs.statSync(final).size === 0) throw new Error('格式转换后没有生成视频。');
       job.status = 'completed';
+      job.stage = 'completed';
       job.phase = '已完成';
     } catch (error) {
       job.status = 'failed';
+      job.stage = 'failed';
       job.phase = '失败';
       job.error = error.message;
     } finally {
@@ -243,6 +330,7 @@ class Generator {
       });
       if (logError) {
         job.status = 'failed';
+        job.stage = 'failed';
         job.error = `日志写入失败：${logError.message}`;
       }
       job.pid = null;
@@ -252,4 +340,4 @@ class Generator {
   }
 }
 
-module.exports = { DEFAULTS, Generator, createWorkspace, workspaceAt, saveSettings, loadJobs, reconcileJobs, videoUrl, validateSettings, validatePrompt };
+module.exports = { DEFAULTS, Generator, createWorkspace, workspaceAt, saveSettings, loadJobs, reconcileJobs, videoUrl, jobFile, deleteJob, validateSettings, validatePrompt, modelFiles, inspectModelRoot, framesForDuration };

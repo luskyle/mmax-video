@@ -4,52 +4,173 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' file:; img-src 'self' data:">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MMax Video</title>
+  <title>MMax Video Studio</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
-    <div><div class="brand"><span class="brand-icon">M</span> MMax Video <span class="badge">LOCAL STUDIO</span></div><p>本地视频创作工作台</p></div>
-    <div class="header-actions"><button id="open-workspace" class="secondary">打开工作区</button><button id="new-workspace" class="secondary">＋ 新建工作区</button></div>
+    <div class="brand"><span class="brand-icon">M</span> MMax Video Studio</div>
+    <div class="header-actions">
+      <button id="toggle-view" class="secondary icon-button" aria-label="切换到画布视图" aria-pressed="false" title="切换到画布视图" disabled>
+        <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="6" rx="1.5"/><rect x="14" y="15" width="7" height="6" rx="1.5"/><path d="M6 9v9h8m-3-3 3 3-3 3M15 4h6m-3-3v6"/></svg>
+      </button>
+      <button id="open-settings" class="secondary icon-button" aria-label="设置" title="设置：配置本地 MiniMax">
+        <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16"/><rect x="7" y="4" width="4" height="6" rx="1"/><rect x="14" y="14" width="4" height="6" rx="1"/></svg>
+      </button>
+    </div>
   </header>
   <main>
     <aside class="card">
-      <div class="section-label">WORKSPACE</div>
+      <div class="workspace-heading">
+        <div class="section-label">工作区</div>
+        <div class="workspace-actions" role="group" aria-label="工作区操作">
+          <button id="new-workspace" class="secondary icon-button" aria-label="新建工作区" title="新建工作区">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 10V7a2 2 0 0 0-2-2h-6l-2-2H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7M17 13v8M13 17h8"/></svg>
+          </button>
+          <button id="open-workspace" class="secondary icon-button" aria-label="打开工作区" title="打开已有工作区">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 11V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v3M3 11h18l-3 9H5z"/></svg>
+          </button>
+        </div>
+      </div>
       <h2 id="workspace-name">尚未选择工作区</h2>
       <p class="muted" id="workspace-path">创建或打开一个工作区，开始创作。</p>
       <div class="divider"></div>
-      <div class="section-label">HISTORY</div>
-      <div class="history-heading"><h3>生成记录</h3><span id="job-count">0</span></div>
+      <div class="history-summary"><span id="job-count" title="当前工作区的画面数量" aria-label="画面数量">0</span></div>
       <div id="history" class="history"><p class="muted">生成的视频会显示在这里。</p></div>
+      <div class="sidebar-bottom">
+        <button id="new-scene" class="primary" title="新建独立的创作画面；当前生成完成后可用" disabled>
+          <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>
+          新建画面
+        </button>
+      </div>
     </aside>
     <section class="content">
-      <div class="intro"><div><div class="section-label">CREATE VIDEO</div><h1>让想象动起来<span>.</span></h1><p class="muted">输入画面、动作和声音描述，在本机生成视频。</p></div><div class="engine"><i></i> CUDA · HyperFlow 6 步</div></div>
       <div id="notice" class="notice hidden" role="status"></div>
+      <section id="generation-progress" class="card generation-progress hidden" aria-label="当前生成进度">
+        <div class="progress-heading">
+          <strong id="progress-phase" role="status"></strong>
+          <span id="generation-elapsed"></span>
+        </div>
+        <p id="progress-prompt"></p>
+        <div id="generation-bar" class="spectrum-track" role="progressbar" aria-label="生成阶段进度" aria-valuemin="0" aria-valuemax="10">
+          <div id="generation-fill" class="spectrum-fill"><span class="spectrum-tip"></span></div>
+        </div>
+        <div class="progress-stages" aria-hidden="true">
+          <span data-phase="preparing">准备</span><span data-phase="sampling">采样</span><span data-phase="decoding">解码</span><span data-phase="encoding">导出</span>
+        </div>
+        <div class="progress-footer">
+          <span id="progress-caption"></span>
+          <button id="active-scene" class="secondary small" title="切换到正在生成的画面">查看生成画面</button>
+        </div>
+      </section>
+      <div id="scene-view" class="scene-view">
+      <div class="scene-heading"><h2 id="scene-title">新建画面</h2><span id="scene-status" class="muted"></span></div>
       <div class="card form">
-        <div class="title-row"><div><h2>创作描述</h2><p class="muted">推荐使用英文，描述主体、场景、运动和声音。</p></div><span class="tag">TEXT TO VIDEO</span></div>
         <label for="prompt">提示词</label>
         <textarea id="prompt" maxlength="4000" placeholder="例如：A giant panda walks through a lush bamboo forest after rain..."></textarea>
         <div class="prompt-footer"><span>画面越具体，结果通常越可控</span><span id="prompt-count">0 / 4000</span></div>
         <div class="divider"></div>
-        <div class="title-row"><div><h2>生成设置</h2><p class="muted">设置将保存在当前工作区。</p></div><span class="tag">5 秒 · 24 FPS</span></div>
         <div class="settings">
           <div><label for="preset">视频尺寸</label><select id="preset"><option value="640x384">640 × 384 · 快速</option><option value="960x544">960 × 544 · 清晰</option><option value="1088x608">1088 × 608 · 高清</option><option value="custom">自定义</option></select></div>
           <div><label for="width">宽度</label><input id="width" type="number" min="256" max="1920" step="32" value="640"></div>
           <div><label for="height">高度</label><input id="height" type="number" min="256" max="1920" step="32" value="384"></div>
           <div><label for="seed">种子</label><input id="seed" type="number" min="-1" max="2147483647" value="-1"></div>
         </div>
-        <p class="hint">宽高须为 32 的倍数；-1 表示随机。高分辨率耗时更长，可能超出显存。</p>
-        <div class="bottom-actions"><button id="save-settings" class="secondary">保存默认设置</button><button id="generate" class="primary">✦ 开始生成</button></div>
+        <div class="output-settings">
+          <div><label for="duration">视频时长</label><select id="duration"><option value="5">5 秒</option><option value="10">10 秒</option><option value="15">15 秒</option></select></div>
+          <div><label for="format">视频格式</label><select id="format"><option value="webm">WebM</option><option value="mp4">MP4</option></select></div>
+          <div><label for="audio">声音</label><select id="audio"><option value="on">有声视频</option><option value="off">无声视频（仅画面）</option></select></div>
+        </div>
+        <p class="hint">宽高须为 32 的倍数；-1 表示随机。时长和分辨率越大，耗时和显存需求越高。无声模式移除成片音轨，不减少音频推理开销。</p>
+        <div class="bottom-actions">
+          <button id="generate" class="primary" title="使用当前画面的提示词和选项生成视频">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9 3 2.5 6.5L18 12l-6.5 2.5L9 21l-2.5-6.5L0 12l6.5-2.5zM20 2v6M17 5h6"/></svg>
+            开始生成
+          </button>
+        </div>
       </div>
       <div class="card result">
-        <div class="title-row"><div><div class="section-label">OUTPUT</div><h2>视频预览</h2></div><div class="result-actions"><button id="show-video" class="secondary small" disabled>显示文件</button><button id="show-log" class="secondary small" disabled>查看日志位置</button></div></div>
+        <div class="title-row">
+          <div><div class="section-label">OUTPUT</div><h2>视频预览</h2></div>
+          <div class="result-actions">
+            <button id="show-video" class="secondary icon-button" aria-label="显示文件" title="在文件管理器中定位视频" disabled>
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>
+            </button>
+          </div>
+        </div>
         <div id="preview-empty" class="preview-empty"><div class="play-icon">▶</div><strong>你的作品将出现在这里</strong><span>生成完成后，可在此播放或在工作区查看文件。</span></div>
         <video id="preview" controls class="hidden"></video>
         <div id="job-detail" class="job-detail hidden"></div>
       </div>
+      </div>
+      <section id="timeline-view" class="card timeline-view hidden" aria-label="画面画布">
+        <div class="timeline-heading">
+          <div><h2>画面画布</h2><p class="muted">自由布局 · 按时间连线</p></div>
+          <span id="timeline-count" class="badge"></span>
+        </div>
+        <div id="timeline-canvas" class="canvas-viewport" tabindex="0" role="region" aria-label="可缩放和平移的画面画布" aria-describedby="canvas-help">
+          <div id="timeline-world" class="canvas-world">
+            <svg class="canvas-connections" aria-hidden="true">
+              <defs>
+                <marker id="canvas-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 9 5 1 9" fill="none" stroke="#ad9cf3" stroke-width="1.5"/></marker>
+              </defs>
+              <g id="timeline-links"></g>
+            </svg>
+            <ol id="timeline-track" class="timeline-track" aria-label="按创建时间从早到晚连接的视频卡片"></ol>
+          </div>
+          <p id="timeline-empty" class="muted hidden">还没有画面，点击左下角「新建画面」开始创作。</p>
+        </div>
+        <div class="canvas-footer">
+          <p id="canvas-help" class="muted">滚轮缩放 · 拖动空白平移<br>拖动卡片手柄移动 · 空格＋拖动平移</p>
+          <div class="canvas-tools" role="group" aria-label="画布视图操作">
+            <button id="canvas-zoom-out" class="secondary icon-button" title="缩小（－）" aria-label="缩小画布"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+            <button id="canvas-reset" class="secondary canvas-scale" title="恢复 100%（0）" aria-label="恢复百分之百缩放">100%</button>
+            <button id="canvas-zoom-in" class="secondary icon-button" title="放大（＋）" aria-label="放大画布"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+            <button id="canvas-fit" class="secondary icon-button" title="适配全部画面（Home）" aria-label="适配全部画面"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><rect x="8" y="8" width="8" height="8" rx="1"/></svg></button>
+            <button id="canvas-arrange" class="secondary icon-button" title="按时间重新排列画面" aria-label="按时间重新排列画面"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/></svg></button>
+          </div>
+        </div>
+      </section>
     </section>
   </main>
-  <dialog id="create-dialog"><form method="dialog"><h2>新建工作区</h2><p class="muted">输入名称后选择父目录，应用会创建新的工作区文件夹。</p><label for="workspace-input">工作区名称</label><input id="workspace-input" maxlength="100" placeholder="例如：我的视频"><div class="dialog-actions"><button value="cancel" class="secondary">取消</button><button id="create-confirm" value="default" class="primary">选择父目录</button></div></form></dialog>
-  <script src="renderer.js"></script>
+  <template id="timeline-card-template">
+    <li class="timeline-node">
+      <article class="timeline-card">
+        <div class="timeline-card-heading">
+          <button class="canvas-drag" title="拖动画面；聚焦后可用方向键移动" aria-label="移动画面">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01"/></svg>
+          </button>
+          <button class="timeline-open" title="打开这个创作画面">
+            <span class="timeline-index"></span><span class="timeline-card-title"></span>
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3h7v7m0-7-9 9M10 5H4v15h15v-6"/></svg>
+          </button>
+        </div>
+        <div class="timeline-media">
+          <video controls preload="metadata" class="hidden"></video>
+          <div class="timeline-placeholder"></div>
+        </div>
+        <div class="timeline-details"><p class="timeline-meta"></p><time></time><p class="timeline-status"></p></div>
+      </article>
+    </li>
+  </template>
+  <dialog id="create-dialog">
+    <form method="dialog">
+      <h2>新建工作区</h2>
+      <p class="muted">输入名称后选择父目录，应用会创建新的工作区文件夹。</p>
+      <label for="workspace-input">工作区名称</label>
+      <input id="workspace-input" maxlength="100" placeholder="例如：我的视频">
+      <div class="dialog-actions">
+        <button value="cancel" class="secondary" title="取消创建工作区">
+          <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 6 12 12M6 18 18 6"/></svg>
+          取消
+        </button>
+        <button id="create-confirm" value="default" class="primary" title="选择新工作区的父目录">
+          <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 11V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v3M3 11h18l-3 9H5z"/></svg>
+          选择父目录
+        </button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="renderer.js"></script>
 </body>
 </html>

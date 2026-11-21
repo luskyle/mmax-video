@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' file:; img-src 'self' data:">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MMax Video Studio · 设置</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div><div class="brand"><span class="brand-icon">M</span> MMax Video Studio <span class="badge">设置</span></div></div>
+    <div class="header-actions">
+      <button id="back" class="secondary" title="返回视频工作台">
+        <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 12H4m7-7-7 7 7 7"/></svg>
+        返回工作台
+      </button>
+    </div>
+  </header>
+  <main class="settings-page">
+    <div class="settings-heading">
+      <div class="section-label">LOCAL SETUP</div>
+      <h1>本地 MiniMax 配置</h1>
+      <p class="muted">设置本机推理环境目录。配置会保存在应用中，不随工作区变化。</p>
+    </div>
+    <div id="notice" class="notice hidden" role="status"></div>
+    <section class="card settings-panel">
+      <h2>安装目录</h2>
+      <p class="muted">选择本地 MiniMax 安装根目录，应用会校验必要文件。</p>
+      <div class="settings-path-row">
+        <div id="model-path" class="settings-path">读取中…</div>
+        <button id="choose-model" class="primary" title="选择并校验 MiniMax 安装目录，成功后自动保存">
+          <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 11V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v3M3 11h18l-3 9H5z"/></svg>
+          选择目录
+        </button>
+      </div>
+      <p id="model-status" class="model-status" role="status">正在检查目录…</p>
+    </section>
+    <section class="card settings-panel">
+      <h2>必需文件</h2>
+      <p class="muted">所选目录需包含以下文件：</p>
+      <ul class="requirements">
+        <li><code>generate.sh</code></li>
+        <li><code>models/diffusion_models/minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf</code></li>
+        <li><code>build-deps/root/usr/bin/ffmpeg</code></li>
+      </ul>
+      <div class="settings-note">工作区请放在 MiniMax 安装目录之外。目录选择完成后会自动保存；任务运行期间不能更改。</div>
+    </section>
+  </main>
+  <script src="settings.js"></script>
+</body>
+</html>

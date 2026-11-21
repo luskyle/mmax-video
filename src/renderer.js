@@ -1,26 +1,38 @@
 'use strict';
 
+import { SceneCanvas } from './canvas.mjs';
+
 const $ = id => document.getElementById(id);
+const settingInputs = ['preset', 'width', 'height', 'seed', 'duration', 'format', 'audio'];
 let current = { workspace: null, jobs: [], active: false };
 let selectedId = null;
-let playingId = null;
+let loadedPage = null;
+let playingPage = null;
+let draft = null;
 let busy = false;
+let refreshPending = false;
+let timelineVisible = false;
+let progressJob = null;
+let progressUnits = 0;
+const timelineEntries = new Map();
+const sceneCanvas = new SceneCanvas($('timeline-view'));
 
 function message(text, isError = false) {
-  const notice = $('notice');
-  notice.textContent = text;
-  notice.classList.toggle('error', isError);
-  notice.classList.toggle('hidden', !text);
+  $('notice').textContent = text;
+  $('notice').classList.toggle('error', isError);
+  $('notice').classList.toggle('hidden', !text);
 }
 
 function settings() {
-  return { width: Number($('width').value), height: Number($('height').value), seed: Number($('seed').value) };
+  return {
+    width: Number($('width').value), height: Number($('height').value), seed: Number($('seed').value),
+    duration: Number($('duration').value), format: $('format').value, audio: $('audio').value === 'on'
+  };
 }
 
 function setSettings(value) {
-  $('width').value = value.width;
-  $('height').value = value.height;
-  $('seed').value = value.seed;
+  for (const id of ['width', 'height', 'seed', 'duration', 'format']) $(id).value = value[id];
+  $('audio').value = value.audio ? 'on' : 'off';
   updatePreset();
 }
 
@@ -29,28 +41,221 @@ function updatePreset() {
   $('preset').value = ['640x384', '960x544', '1088x608'].includes(key) ? key : 'custom';
 }
 
-function setBusy(value) {
-  busy = value;
-  const disabled = busy || current.active;
-  $('generate').disabled = disabled || !current.workspace;
-  $('new-workspace').disabled = disabled;
-  $('open-workspace').disabled = disabled;
-  $('save-settings').disabled = busy || !current.workspace;
+function updatePromptCount() {
+  $('prompt-count').textContent = `${$('prompt').value.length} / 4000`;
 }
 
-function render(state, resetSettings = false) {
-  const previousRoot = current.workspace?.root;
+function setBusy(value) {
+  busy = value;
+  const locked = busy || current.active;
+  $('generate').disabled = locked || !current.workspace || selectedId !== null;
+  $('generate').classList.toggle('hidden', selectedId !== null);
+  for (const id of ['new-workspace', 'open-workspace', 'open-settings']) $(id).disabled = locked;
+  $('new-scene').disabled = locked || !current.workspace;
+  $('toggle-view').disabled = busy || !current.workspace;
+  const readonly = locked || selectedId !== null || !current.workspace;
+  $('prompt').readOnly = readonly;
+  for (const id of settingInputs) $(id).disabled = readonly;
+}
+
+function selectScene(id) {
+  if (busy) return;
+  if (selectedId === null && current.workspace) draft = { prompt: $('prompt').value, settings: settings() };
+  selectedId = id;
+  setView(false);
+  render(current);
+}
+
+function setView(timeline) {
+  if (timeline === timelineVisible) return;
+  timelineVisible = timeline;
+  if (timeline) $('preview').pause();
+  else for (const entry of timelineEntries.values()) entry.video.pause();
+}
+
+function removeTimelineEntry(id) {
+  const entry = timelineEntries.get(id);
+  timelineEntries.delete(id);
+  entry.video.pause();
+  entry.video.removeAttribute('src');
+  entry.video.load();
+  entry.node.remove();
+}
+
+function showRecordMenu(event, id) {
+  event.preventDefault();
+  window.mmax.recordMenu(id).catch(error => message(error.message, true));
+}
+
+function renderTimeline() {
+  const root = current.workspace?.root;
+  const jobs = [...current.jobs].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const ids = new Set(jobs.map(job => job.id));
+  for (const id of timelineEntries.keys()) if (!ids.has(id)) removeTimelineEntry(id);
+  $('timeline-count').textContent = `${jobs.length} 个画面`;
+  $('timeline-empty').classList.toggle('hidden', jobs.length > 0);
+  $('timeline-track').classList.toggle('hidden', jobs.length === 0);
+  jobs.forEach((job, index) => {
+    let entry = timelineEntries.get(job.id);
+    if (!entry) {
+      const node = $('timeline-card-template').content.firstElementChild.cloneNode(true);
+      node.dataset.jobId = job.id;
+      entry = {
+        node, card: node.querySelector('.timeline-card'), open: node.querySelector('.timeline-open'),
+        video: node.querySelector('video'), placeholder: node.querySelector('.timeline-placeholder'),
+        mediaKey: null, mediaError: null
+      };
+      timelineEntries.set(job.id, entry);
+      entry.open.addEventListener('click', () => selectScene(job.id));
+      entry.card.addEventListener('contextmenu', event => showRecordMenu(event, job.id));
+      entry.video.addEventListener('play', () => {
+        $('preview').pause();
+        for (const other of timelineEntries.values()) if (other !== entry) other.video.pause();
+      });
+      entry.video.addEventListener('error', () => {
+        if (timelineEntries.get(job.id) !== entry || !current.jobs.some(item => item.id === job.id)) return;
+        entry.mediaError = '视频无法播放，请打开该画面查看文件。';
+        entry.placeholder.textContent = entry.mediaError;
+        entry.placeholder.classList.remove('hidden');
+        entry.video.classList.add('hidden');
+      });
+    }
+    if ($('timeline-track').children[index] !== entry.node) {
+      $('timeline-track').insertBefore(entry.node, $('timeline-track').children[index] || null);
+    }
+    entry.card.dataset.status = job.status;
+    entry.card.classList.toggle('selected', selectedId === job.id);
+    entry.open.setAttribute('aria-label', `打开画面：${job.prompt}`);
+    entry.open.title = `打开画面：${job.prompt}`;
+    entry.node.querySelector('.canvas-drag').setAttribute('aria-label', `移动画面：${job.prompt}`);
+    entry.node.querySelector('.timeline-index').textContent = String(index + 1).padStart(2, '0');
+    entry.node.querySelector('.timeline-card-title').textContent = job.prompt;
+    entry.node.querySelector('.timeline-meta').textContent = `${job.width} × ${job.height} · ${job.duration} 秒 · ${job.format.toUpperCase()} · ${job.audio ? '有声' : '无声'}`;
+    const time = entry.node.querySelector('time');
+    time.dateTime = job.createdAt;
+    time.textContent = new Date(job.createdAt).toLocaleString('zh-CN');
+    const status = entry.node.querySelector('.timeline-status');
+    status.textContent = job.error || statusText(job);
+    status.title = status.textContent;
+    if (job.status === 'completed') {
+      const key = `${root}/${job.id}/${job.format}`;
+      if (entry.mediaKey !== key) {
+        entry.mediaKey = key;
+        entry.mediaError = null;
+        window.mmax.video(job.id).then(url => {
+          if (timelineEntries.get(job.id) === entry && entry.mediaKey === key && current.workspace?.root === root &&
+              current.jobs.some(item => item.id === job.id && item.status === 'completed')) {
+            entry.video.src = url;
+          }
+        }).catch(error => {
+          if (timelineEntries.get(job.id) !== entry || current.workspace?.root !== root ||
+              !current.jobs.some(item => item.id === job.id)) return;
+          entry.mediaError = error.message;
+          entry.placeholder.textContent = error.message;
+          entry.placeholder.classList.remove('hidden');
+          entry.video.classList.add('hidden');
+        });
+      }
+      entry.video.classList.toggle('hidden', Boolean(entry.mediaError));
+      entry.placeholder.classList.toggle('hidden', !entry.mediaError);
+      if (entry.mediaError) entry.placeholder.textContent = entry.mediaError;
+    } else {
+      if (entry.mediaKey) {
+        entry.video.pause();
+        entry.video.removeAttribute('src');
+        entry.video.load();
+        entry.mediaKey = null;
+        entry.mediaError = null;
+      }
+      entry.video.classList.add('hidden');
+      entry.placeholder.classList.remove('hidden');
+      entry.placeholder.textContent = statusText(job);
+    }
+  });
+  sceneCanvas.sync(jobs.map(job => timelineEntries.get(job.id).node));
+}
+
+function statusText(job) {
+  return { running: job.phase || '生成中', completed: '已完成', failed: '生成失败', interrupted: '已中断' }[job.status] || job.status;
+}
+
+function updateElapsed() {
+  const job = current.jobs.find(item => item.status === 'running');
+  if (!job) return;
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(job.createdAt)) / 1000));
+  $('generation-elapsed').textContent = `已用时 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
+function renderProgress() {
+  const job = current.jobs.find(item => item.status === 'running');
+  $('generation-progress').classList.toggle('hidden', !job);
+  if (!job) {
+    progressJob = null;
+    progressUnits = 0;
+    $('generation-fill').style.width = '0%';
+    return;
+  }
+  $('progress-phase').textContent = statusText(job);
+  $('progress-prompt').textContent = job.prompt;
+  const sampling = job.stage === 'sampling' && Number.isInteger(job.samplingStep);
+  if (progressJob !== job.id) { progressJob = job.id; progressUnits = 0; }
+  const units = { preparing: 1, sampling: 1 + Math.max(0, Math.min(6, job.samplingStep || 0)), decoding: 8, encoding: 9 };
+  progressUnits = Math.max(progressUnits, units[job.stage] || 1);
+  $('generation-fill').style.width = `${progressUnits * 10}%`;
+  $('generation-bar').setAttribute('aria-valuenow', String(progressUnits));
+  $('generation-bar').setAttribute('aria-valuetext', statusText(job));
+  const phases = ['preparing', 'sampling', 'decoding', 'encoding'];
+  const phaseIndex = Math.max(0, phases.indexOf(job.stage));
+  for (const [index, element] of [...document.querySelectorAll('[data-phase]')].entries()) {
+    element.classList.toggle('is-complete', index < phaseIndex);
+    element.classList.toggle('is-active', index === phaseIndex);
+  }
+  $('progress-caption').textContent = sampling
+    ? `采样 ${job.samplingStep} / 6 步，之后还需解码和导出`
+    : '随实际处理阶段推进，不代表剩余时间';
+  $('active-scene').classList.toggle('hidden', selectedId === job.id && !timelineVisible);
+  updateElapsed();
+}
+
+function render(state) {
+  const rootChanged = current.workspace?.root !== state.workspace?.root;
   current = state;
   const workspace = state.workspace;
   $('workspace-name').textContent = workspace?.name || '尚未选择工作区';
   $('workspace-path').textContent = workspace?.root || '创建或打开一个工作区，开始创作。';
-  if (workspace && (resetSettings || workspace.root !== previousRoot)) {
-    setSettings(workspace.settings);
-    selectedId = null;
-    playingId = null;
+  if (rootChanged) {
+    for (const id of timelineEntries.keys()) removeTimelineEntry(id);
+    sceneCanvas.reset();
+    progressJob = null;
+    progressUnits = 0;
+    draft = workspace ? { prompt: '', settings: { ...workspace.settings } } : null;
+    selectedId = state.jobs.find(job => job.status === 'running')?.id || state.jobs[0]?.id || null;
+    loadedPage = null;
   }
+  if (selectedId !== null && !state.jobs.some(job => job.id === selectedId)) {
+    selectedId = state.jobs.find(job => job.status === 'running')?.id || state.jobs[0]?.id || null;
+  }
+  if (selectedId === null && !draft && workspace) draft = { prompt: '', settings: { ...workspace.settings } };
+  const job = state.jobs.find(item => item.id === selectedId);
+  const page = `${workspace?.root || ''}/${selectedId || 'draft'}`;
+  if (loadedPage !== page) {
+    const values = job ? { prompt: job.prompt, settings: job } : draft;
+    if (values) {
+      $('prompt').value = values.prompt;
+      setSettings(values.settings);
+    } else {
+      $('prompt').value = '';
+    }
+    updatePromptCount();
+    loadedPage = page;
+  }
+  $('scene-title').textContent = job ? '创作画面' : '新建画面';
+  $('scene-status').textContent = job
+    ? `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${statusText(job)} · 参数只读`
+    : '填写提示词后开始生成';
   $('job-count').textContent = state.jobs.length;
   const history = $('history');
+  const scrollTop = history.scrollTop;
   history.replaceChildren();
   if (!state.jobs.length) {
     const empty = document.createElement('p');
@@ -58,36 +263,44 @@ function render(state, resetSettings = false) {
     empty.textContent = '生成的视频会显示在这里。';
     history.append(empty);
   }
-  if (!state.jobs.some(job => job.id === selectedId)) selectedId = state.jobs[0]?.id || null;
-  for (const job of state.jobs) {
+  for (const item of state.jobs) {
     const button = document.createElement('button');
-    button.className = `history-item${job.id === selectedId ? ' selected' : ''}`;
+    button.className = `history-item${item.id === selectedId ? ' selected' : ''}`;
+    button.title = '点击切换创作画面；右键删除记录';
+    button.setAttribute('aria-current', item.id === selectedId ? 'page' : 'false');
     const title = document.createElement('span');
     title.className = 'history-title';
-    title.textContent = job.prompt;
+    title.textContent = item.prompt;
     const info = document.createElement('span');
     info.className = 'history-info';
-    info.textContent = `${job.width} × ${job.height}  ·  ${statusText(job)}  ·  ${new Date(job.createdAt).toLocaleString('zh-CN')}`;
+    info.textContent = `${item.duration} 秒 · ${item.format.toUpperCase()} · ${item.audio ? '有声' : '无声'} · ${statusText(item)}`;
     button.append(title, info);
-    button.addEventListener('click', () => { selectedId = job.id; render(current); });
+    button.addEventListener('click', () => selectScene(item.id));
+    button.addEventListener('contextmenu', event => showRecordMenu(event, item.id));
     history.append(button);
   }
-  const job = state.jobs.find(item => item.id === selectedId);
+  history.scrollTop = scrollTop;
   $('show-video').disabled = !job || job.status !== 'completed';
-  $('show-log').disabled = !job;
   $('job-detail').classList.toggle('hidden', !job);
-  $('job-detail').textContent = job ? `${statusText(job)} · ${job.width} × ${job.height} · 种子 ${job.seed}${job.error ? ` · ${job.error}` : ''}` : '';
+  $('job-detail').textContent = job
+    ? `${statusText(job)} · ${job.width} × ${job.height} · ${job.duration} 秒 · ${job.format.toUpperCase()} · ${job.audio ? '有声' : '无声'} · 种子 ${job.seed}${job.error ? ` · ${job.error}` : ''}`
+    : '';
   if (job?.status === 'completed') {
     $('preview-empty').classList.add('hidden');
     $('preview').classList.remove('hidden');
-    if (playingId !== job.id) {
-      playingId = job.id;
+    if (playingPage !== page) {
+      playingPage = page;
+      $('preview').pause();
+      $('preview').removeAttribute('src');
+      $('preview').load();
       window.mmax.video(job.id).then(url => {
-        if (selectedId === job.id) $('preview').src = url;
-      }).catch(error => message(error.message, true));
+        if (playingPage === page) $('preview').src = url;
+      }).catch(error => {
+        if (playingPage === page) { playingPage = null; message(error.message, true); }
+      });
     }
   } else {
-    playingId = null;
+    playingPage = null;
     $('preview').pause();
     $('preview').removeAttribute('src');
     $('preview').classList.add('hidden');
@@ -95,22 +308,39 @@ function render(state, resetSettings = false) {
     $('preview-empty').querySelector('strong').textContent = job ? statusText(job) : '你的作品将出现在这里';
     $('preview-empty').querySelector('span').textContent = job?.error || (job ? '生成过程和输出文件保存在工作区。' : '生成完成后，可在此播放或在工作区查看文件。');
   }
+  renderProgress();
+  $('scene-view').classList.toggle('hidden', timelineVisible);
+  $('timeline-view').classList.toggle('hidden', !timelineVisible);
+  document.querySelector('.content').classList.toggle('canvas-mode', timelineVisible);
+  $('toggle-view').setAttribute('aria-pressed', String(timelineVisible));
+  const viewLabel = timelineVisible ? '切换到创作视图' : '切换到画布视图';
+  $('toggle-view').setAttribute('aria-label', viewLabel);
+  $('toggle-view').title = viewLabel;
+  if (timelineVisible) renderTimeline();
+  sceneCanvas.setVisible(timelineVisible);
   setBusy(busy);
 }
 
-function statusText(job) {
-  return { running: job.phase || '生成中', completed: '已完成', failed: '生成失败', interrupted: '已中断' }[job.status] || job.status;
+async function refreshState() {
+  if (busy) { refreshPending = true; return; }
+  refreshPending = false;
+  try { render(await window.mmax.state()); }
+  catch (error) { message(error.message, true); }
 }
 
-async function action(callback, resetSettings = false) {
+async function action(callback) {
+  if (busy) return;
   setBusy(true);
   message('');
-  try { render(await callback(), resetSettings); }
+  try { render(await callback()); }
   catch (error) { message(error.message, true); }
-  finally { setBusy(false); }
+  finally {
+    setBusy(false);
+    if (refreshPending) refreshState();
+  }
 }
 
-$('prompt').addEventListener('input', () => { $('prompt-count').textContent = `${$('prompt').value.length} / 4000`; });
+$('prompt').addEventListener('input', updatePromptCount);
 $('preset').addEventListener('change', event => {
   if (event.target.value === 'custom') return;
   const [width, height] = event.target.value.split('x');
@@ -123,20 +353,38 @@ $('create-dialog').addEventListener('close', () => {
   if ($('create-dialog').returnValue === 'default') action(() => window.mmax.createWorkspace($('workspace-input').value));
 });
 $('open-workspace').addEventListener('click', () => action(() => window.mmax.openWorkspace()));
-$('save-settings').addEventListener('click', () => action(() => window.mmax.saveSettings(settings()), true));
-$('generate').addEventListener('click', () => action(async () => {
-  const state = await window.mmax.start($('prompt').value, settings());
-  selectedId = state.jobs[0]?.id || null;
+$('open-settings').addEventListener('click', () => window.mmax.openSettings().catch(error => message(error.message, true)));
+$('toggle-view').addEventListener('click', () => {
+  if (busy || !current.workspace) return;
+  setView(!timelineVisible);
+  render(current);
+});
+$('new-scene').addEventListener('click', () => action(async () => {
+  const state = await window.mmax.newScene();
+  if (selectedId !== null || !draft) {
+    if (!draft) draft = { prompt: '', settings: { ...state.workspace.settings } };
+    selectedId = null;
+    loadedPage = null;
+  }
+  setView(false);
+  $('prompt').focus();
   return state;
 }));
+$('generate').addEventListener('click', () => action(async () => {
+  const state = await window.mmax.start($('prompt').value, settings());
+  selectedId = state.startedId;
+  draft = null;
+  return state;
+}));
+$('active-scene').addEventListener('click', () => {
+  const job = current.jobs.find(item => item.status === 'running');
+  if (job) selectScene(job.id);
+});
 $('show-video').addEventListener('click', () => window.mmax.show(selectedId, 'video').catch(error => message(error.message, true)));
-$('show-log').addEventListener('click', () => window.mmax.show(selectedId, 'log').catch(error => message(error.message, true)));
 window.mmax.onEvent(event => {
   if (event.type === 'error') message(event.message, true);
-  if (busy) return;
-  window.mmax.state().then(state => render(state)).catch(error => message(error.message, true));
+  refreshState();
 });
-window.mmax.state().then(state => render(state, true)).catch(error => message(error.message, true));
-setInterval(() => {
-  if (current.active && !busy) window.mmax.state().then(state => render(state)).catch(error => message(error.message, true));
-}, 5000);
+refreshState();
+setInterval(() => { if (current.active) refreshState(); }, 2000);
+setInterval(updateElapsed, 1000);
