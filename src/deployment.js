@@ -5,7 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn, spawnSync } = require('node:child_process');
 
-const PATH_KEYS = ['model_dir', 'source_dir', 'build_dir', 'sd_cli', 'runtime_dir', 'diffusion_model', 'text_encoder', 'video_vae', 'audio_vae'];
+const PATH_KEYS = ['model_dir', 'source_dir', 'build_dir', 'sd_cli', 'runtime_dir', 'diffusion_model', 'text_encoder', 'video_vae', 'audio_vae', 'image_model', 'image_vae'];
 const ENV_KEYS = [...PATH_KEYS.map(key => `MINIMAX_H3_${key.toUpperCase()}`), 'CUDA_HOME', 'MINIMAX_H3_CUDA_ARCHITECTURES', 'HF_ENDPOINT'];
 const DEFAULT_OPTIONS = { profile: 'hyperflow', steps: 6, env: {}, ffmpeg: '' };
 
@@ -71,7 +71,8 @@ function operationArgs(action, options, input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('部署操作参数无效。');
   if (action === 'doctor') {
     if (input.checksum !== undefined && typeof input.checksum !== 'boolean') throw new Error('校验选项无效。');
-    return ['doctor', '--profile', options.profile, ...(input.checksum ? ['--checksum'] : [])];
+    if (input.image !== undefined && typeof input.image !== 'boolean') throw new Error('图片诊断选项无效。');
+    return ['doctor', '--profile', input.image === true ? 'image' : options.profile, ...(input.checksum ? ['--checksum'] : [])];
   }
   if (action === 'build') {
     if (!Number.isInteger(input.jobs) || input.jobs < 1 || input.jobs > 256) throw new Error('构建并行数须为 1–256。');
@@ -79,7 +80,7 @@ function operationArgs(action, options, input = {}) {
   }
   if (action === 'download') {
     if (input.acceptLicense !== true) throw new Error('请先阅读并确认模型许可证。');
-    if (!['standard', 'hyperflow', 'all'].includes(input.profile)) throw new Error('下载预设无效。');
+    if (!['standard', 'hyperflow', 'image', 'all'].includes(input.profile)) throw new Error('下载预设无效。');
     return ['download', '--profile', input.profile, '--accept-license'];
   }
   throw new Error('不支持的部署操作。');

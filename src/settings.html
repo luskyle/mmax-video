@@ -35,6 +35,7 @@
         </button>
       </div>
       <p id="model-status" class="model-status" role="status">正在检查目录…</p>
+      <p id="image-status" class="model-status" role="status">正在检查图片模型…</p>
       <div class="deployment-actions">
         <button id="refresh" class="secondary">刷新检查</button>
         <button id="show-readme" class="secondary">部署说明与许可证</button>
@@ -72,12 +73,14 @@
       <div class="deployment-actions">
         <button id="doctor" class="secondary">环境诊断</button>
         <button id="checksum" class="secondary">完整 SHA256 校验</button>
+        <button id="image-doctor" class="secondary">图片模型诊断</button>
       </div>
       <div class="deployment-grid">
         <div><label for="build-jobs">构建并行数（低内存建议 2）</label><input id="build-jobs" type="number" min="1" max="256" value="2"></div>
-        <div><label for="download-profile">下载模型</label><select id="download-profile"><option value="hyperflow">HyperFlow</option><option value="standard">Standard</option><option value="all">两套模型（共享编码器和 VAE）</option></select></div>
+        <div><label for="download-profile">下载模型</label><select id="download-profile"><option value="hyperflow">HyperFlow 视频</option><option value="standard">Standard 视频</option><option value="all">两套视频模型</option><option value="image">MiniMax-H3-Image 图片（独立许可证）</option></select></div>
       </div>
       <label class="license-confirm"><input id="accept-license" type="checkbox">我已阅读部署项目 README 中的模型许可证，并确认下载</label>
+      <p class="hint">图片模型使用独立的 MiniMax-H3-Image 许可证，含地域限制；对外托管服务或年收入超过 100 万美元需额外授权。请先通过上方“部署说明与许可证”查看条款。图片不会复用视频扩散权重或视频 VAE。</p>
       <div class="deployment-actions">
         <button id="build" class="secondary">构建 CUDA 引擎</button>
         <button id="download" class="secondary">下载／校验模型</button>

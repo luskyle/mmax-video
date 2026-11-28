@@ -31,6 +31,48 @@ function waitForCompletion(generator) {
   });
 }
 
+test('image jobs use dedicated CLI, bypass FFmpeg and retain PNG history', async t => {
+  const { root, model } = fixture(t);
+  fs.writeFileSync(path.join(model, 'generate.sh'), '#!/bin/sh\nexit 99\n');
+  fs.writeFileSync(path.join(model, 'deploy.py'), `import json,sys,pathlib
+assert sys.argv[1] == "generate-image"
+if "--dry-run" in sys.argv:
+ print(json.dumps(["sd-cli","--diffusion-model","/configured/image.gguf"]))
+else:
+ pathlib.Path("image-args.json").write_text(json.dumps(sys.argv[1:]))
+ pathlib.Path(sys.argv[-1]).write_bytes(b"PNG fixture")
+`);
+  const options = { profile: 'standard', steps: 20, env: {}, ffmpeg: '/not-installed' };
+  assert.equal(inspectModelRoot(model, options, true).missing.length, 0);
+  assert.notEqual(inspectModelRoot(model, options).missing.length, 0);
+  const workspace = createWorkspace(root, 'images', model);
+  const settings = { kind: 'image', width: 1024, height: 1024, seed: 42 };
+  for (const change of [{ width: 480 }, { height: 2080 }, { width: 513 }]) {
+    assert.throws(() => validateSettings({ ...settings, ...change }, true), /32/);
+  }
+  const generator = new Generator(model, () => {});
+  generator.options = options;
+  const job = generator.start(workspace, '--a fox', settings);
+  assert.throws(() => generator.start(workspace, 'video', DEFAULTS), /正在运行/);
+  await waitForCompletion(generator);
+  const restored = workspaceAt(workspace.root, model);
+  const [finished] = loadJobs(restored);
+  assert.equal(finished.status, 'completed', finished.error);
+  assert.equal(finished.kind, 'image');
+  assert.equal(finished.profile, 'image');
+  assert.equal(finished.steps, 6);
+  assert.equal(finished.format, 'png');
+  const file = jobFile(restored, job.id, 'video');
+  assert.match(file, /image\.png$/);
+  const args = JSON.parse(fs.readFileSync(path.join(path.dirname(file), 'image-args.json'), 'utf8'));
+  assert.equal(args[0], 'generate-image');
+  assert.deepEqual(args.slice(-3), ['--', '--a fox', file]);
+  assert.equal(args.includes('--video-frames'), false);
+  assert.match(videoUrl(restored, job.id), /image\.png$/);
+  deleteJob(restored, job.id);
+  assert.equal(fs.existsSync(file), false);
+});
+
 test('workspaces persist settings and reject invalid locations and dimensions', t => {
   const { root, model } = fixture(t);
   const workspace = createWorkspace(root, '测试空间', model);

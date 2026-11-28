@@ -25,6 +25,12 @@ if sys.argv[1] == "inspect":
  print(json.dumps({"schema_version":1,"settings":dict.fromkeys(${JSON.stringify(deployment.PATH_KEYS)}, "/configured/path") | {"profile":profile},"engine_commit":"smoke","capabilities":{"backend":"cuda","fps":24,"width_height":{"min":256,"max":1344,"multiple":32},"frames":{"min":124,"max":345},"max_prompt_characters":7000}}))
 elif sys.argv[1] == "generate":
  print(json.dumps(["sd-cli","--diffusion-model","/configured/"+profile+".gguf"]))
+elif sys.argv[1] == "generate-image":
+ if "--dry-run" in sys.argv:
+  print(json.dumps(["sd-cli","--diffusion-model","/configured/image.gguf"]))
+ else:
+  import base64,pathlib
+  pathlib.Path(sys.argv[-1]).write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC1sAAAAASUVORK5CYII="))
 else:
  print("operation", sys.argv[1:], flush=True)
  print("models", os.environ.get("MINIMAX_H3_MODEL_DIR"), flush=True)
@@ -157,6 +163,23 @@ try {
   const inferenceArgs = fs.readFileSync(path.join(workspace.root, 'jobs', standard.id, 'inference-args.txt'), 'utf8').trim().split('\n');
   assert.equal(inferenceArgs[inferenceArgs.indexOf('--profile') + 1], 'standard');
   assert.equal(inferenceArgs[inferenceArgs.indexOf('--steps') + 1], '12');
+  await page.locator('#new-scene').click();
+  await page.locator('#kind').selectOption('image');
+  assert.equal(await page.locator('.output-settings').isVisible(), false);
+  assert.equal(await page.locator('#width').inputValue(), '1024');
+  await page.locator('#prompt').fill('Image smoke scene');
+  await page.locator('#generate').click();
+  await page.waitForFunction(() => document.getElementById('image-preview')?.naturalWidth > 0);
+  assert.equal(await page.locator('#preview').isVisible(), false);
+  const imageJob = workspaceApi.loadJobs(workspace).find(job => job.prompt === 'Image smoke scene');
+  assert.equal(imageJob.kind, 'image');
+  assert.equal(imageJob.steps, 6);
+  assert.equal(imageJob.format, 'png');
+  await page.locator('#toggle-view').click();
+  const imageNode = page.locator('.timeline-node').filter({ hasText: 'Image smoke scene' });
+  await imageNode.locator('img').waitFor({ state: 'visible' });
+  assert.equal(await imageNode.locator('video').isVisible(), false);
+  await page.locator('#toggle-view').click();
   await page.locator('#open-settings').click();
   await page.waitForFunction(() => document.getElementById('profile')?.value === 'standard');
   assert.equal(await page.locator('#steps').inputValue(), '12');
@@ -170,6 +193,13 @@ try {
   await page.locator('#download').click();
   await page.waitForFunction(() => document.getElementById('operation-status')?.textContent.includes('完成'));
   assert.match(await page.locator('#operation-log').textContent(), /download.*all.*--accept-license/);
+  await page.locator('#image-doctor').click();
+  await page.waitForFunction(() => document.getElementById('operation-status')?.textContent.includes('完成'));
+  assert.match(await page.locator('#operation-log').textContent(), /doctor.*--profile.*image/);
+  await page.locator('#download-profile').selectOption('image');
+  await page.locator('#download').click();
+  await page.waitForFunction(() => document.getElementById('operation-status')?.textContent.includes('完成'));
+  assert.match(await page.locator('#operation-log').textContent(), /download.*image.*--accept-license/);
   await application.close();
   application = await electron.launch({
     executablePath: binary, args: ['--disable-gpu', '--force-device-scale-factor=1'],

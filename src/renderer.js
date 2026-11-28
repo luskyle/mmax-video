@@ -3,7 +3,8 @@
 import { SceneCanvas } from './canvas.mjs';
 
 const $ = id => document.getElementById(id);
-const settingInputs = ['preset', 'width', 'height', 'seed', 'duration', 'format', 'audio'];
+const settingInputs = ['kind', 'preset', 'width', 'height', 'seed', 'duration', 'format', 'audio'];
+const presets = { video: ['640x384', '960x544', '1088x608'], image: ['1024x1024', '1344x768', '768x1344', '512x512'] };
 let current = { workspace: null, jobs: [], active: false };
 let selectedId = null;
 let loadedPage = null;
@@ -25,20 +26,41 @@ function message(text, isError = false) {
 
 function settings() {
   return {
+    kind: $('kind').value,
     width: Number($('width').value), height: Number($('height').value), seed: Number($('seed').value),
     duration: Number($('duration').value), format: $('format').value, audio: $('audio').value === 'on'
   };
 }
 
 function setSettings(value) {
+  $('kind').value = value.kind || 'video';
   for (const id of ['width', 'height', 'seed', 'duration', 'format']) $(id).value = value[id];
   $('audio').value = value.audio ? 'on' : 'off';
+  updateMediaControls();
+}
+
+function updateMediaControls() {
+  const image = $('kind').value === 'image';
+  const choices = presets[$('kind').value];
+  $('preset').replaceChildren(...[...choices, 'custom'].map(value => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value === 'custom' ? '自定义' : value.replace('x', ' × ');
+    return option;
+  }));
+  for (const key of ['width', 'height']) {
+    $(key).min = image ? '512' : '256';
+    $(key).max = image ? '2048' : '1344';
+  }
+  document.querySelector('.output-settings').classList.toggle('hidden', image);
+  $('image-hint').classList.toggle('hidden', !image);
+  $('deployment-summary').classList.toggle('hidden', image);
   updatePreset();
 }
 
 function updatePreset() {
   const key = `${$('width').value}x${$('height').value}`;
-  $('preset').value = ['640x384', '960x544', '1088x608'].includes(key) ? key : 'custom';
+  $('preset').value = presets[$('kind').value].includes(key) ? key : 'custom';
 }
 
 function updatePromptCount() {
@@ -80,6 +102,7 @@ function removeTimelineEntry(id) {
   entry.video.pause();
   entry.video.removeAttribute('src');
   entry.video.load();
+  entry.image.removeAttribute('src');
   entry.node.remove();
 }
 
@@ -103,7 +126,7 @@ function renderTimeline() {
       node.dataset.jobId = job.id;
       entry = {
         node, card: node.querySelector('.timeline-card'), open: node.querySelector('.timeline-open'),
-        video: node.querySelector('video'), placeholder: node.querySelector('.timeline-placeholder'),
+        video: node.querySelector('video'), image: node.querySelector('img'), placeholder: node.querySelector('.timeline-placeholder'),
         mediaKey: null, mediaError: null
       };
       timelineEntries.set(job.id, entry);
@@ -120,6 +143,13 @@ function renderTimeline() {
         entry.placeholder.classList.remove('hidden');
         entry.video.classList.add('hidden');
       });
+      entry.image.addEventListener('error', () => {
+        if (timelineEntries.get(job.id) !== entry) return;
+        entry.mediaError = '图片无法加载，请打开画面查看文件。';
+        entry.placeholder.textContent = entry.mediaError;
+        entry.placeholder.classList.remove('hidden');
+        entry.image.classList.add('hidden');
+      });
     }
     if ($('timeline-track').children[index] !== entry.node) {
       $('timeline-track').insertBefore(entry.node, $('timeline-track').children[index] || null);
@@ -131,7 +161,7 @@ function renderTimeline() {
     entry.node.querySelector('.canvas-drag').setAttribute('aria-label', `移动画面：${job.prompt}`);
     entry.node.querySelector('.timeline-index').textContent = String(index + 1).padStart(2, '0');
     entry.node.querySelector('.timeline-card-title').textContent = job.prompt;
-    entry.node.querySelector('.timeline-meta').textContent = `${job.width} × ${job.height} · ${job.duration} 秒 · ${job.format.toUpperCase()} · ${job.audio ? '有声' : '无声'}`;
+    entry.node.querySelector('.timeline-meta').textContent = `${job.width} × ${job.height} · ${mediaDescription(job)}`;
     const time = entry.node.querySelector('time');
     time.dateTime = job.createdAt;
     time.textContent = new Date(job.createdAt).toLocaleString('zh-CN');
@@ -146,7 +176,7 @@ function renderTimeline() {
         window.mmax.video(job.id).then(url => {
           if (timelineEntries.get(job.id) === entry && entry.mediaKey === key && current.workspace?.root === root &&
               current.jobs.some(item => item.id === job.id && item.status === 'completed')) {
-            entry.video.src = url;
+            (job.kind === 'image' ? entry.image : entry.video).src = url;
           }
         }).catch(error => {
           if (timelineEntries.get(job.id) !== entry || current.workspace?.root !== root ||
@@ -155,9 +185,11 @@ function renderTimeline() {
           entry.placeholder.textContent = error.message;
           entry.placeholder.classList.remove('hidden');
           entry.video.classList.add('hidden');
+          entry.image.classList.add('hidden');
         });
       }
-      entry.video.classList.toggle('hidden', Boolean(entry.mediaError));
+      entry.video.classList.toggle('hidden', job.kind === 'image' || Boolean(entry.mediaError));
+      entry.image.classList.toggle('hidden', job.kind !== 'image' || Boolean(entry.mediaError));
       entry.placeholder.classList.toggle('hidden', !entry.mediaError);
       if (entry.mediaError) entry.placeholder.textContent = entry.mediaError;
     } else {
@@ -169,6 +201,7 @@ function renderTimeline() {
         entry.mediaError = null;
       }
       entry.video.classList.add('hidden');
+      entry.image.classList.add('hidden');
       entry.placeholder.classList.remove('hidden');
       entry.placeholder.textContent = statusText(job);
     }
@@ -178,6 +211,10 @@ function renderTimeline() {
 
 function statusText(job) {
   return { running: job.phase || '生成中', completed: '已完成', failed: '生成失败', interrupted: '已中断' }[job.status] || job.status;
+}
+
+function mediaDescription(job) {
+  return job.kind === 'image' ? '图片 · PNG' : `${job.duration} 秒 · ${job.format.toUpperCase()} · ${job.audio ? '有声' : '无声'}`;
 }
 
 function updateElapsed() {
@@ -265,7 +302,7 @@ function render(state) {
   if (!state.jobs.length) {
     const empty = document.createElement('p');
     empty.className = 'muted';
-    empty.textContent = '生成的视频会显示在这里。';
+    empty.textContent = '生成的视频和图片会显示在这里。';
     history.append(empty);
   }
   for (const item of state.jobs) {
@@ -278,7 +315,7 @@ function render(state) {
     title.textContent = item.prompt;
     const info = document.createElement('span');
     info.className = 'history-info';
-    info.textContent = `${item.duration} 秒 · ${item.format.toUpperCase()} · ${item.audio ? '有声' : '无声'} · ${statusText(item)}`;
+    info.textContent = `${mediaDescription(item)} · ${statusText(item)}`;
     button.append(title, info);
     button.addEventListener('click', () => selectScene(item.id));
     button.addEventListener('contextmenu', event => showRecordMenu(event, item.id));
@@ -288,18 +325,20 @@ function render(state) {
   $('show-video').disabled = !job || job.status !== 'completed';
   $('job-detail').classList.toggle('hidden', !job);
   $('job-detail').textContent = job
-    ? `${statusText(job)} · ${job.profile || 'hyperflow'} · ${job.steps || 6} 步 · ${job.width} × ${job.height} · ${job.duration} 秒 · ${job.format.toUpperCase()} · ${job.audio ? '有声' : '无声'} · 种子 ${job.seed}${job.error ? ` · ${job.error}` : ''}`
+    ? `${statusText(job)} · ${job.profile || 'hyperflow'} · ${job.steps || 6} 步 · ${job.width} × ${job.height} · ${mediaDescription(job)} · 种子 ${job.seed}${job.error ? ` · ${job.error}` : ''}`
     : '';
   if (job?.status === 'completed') {
     $('preview-empty').classList.add('hidden');
-    $('preview').classList.remove('hidden');
+    $('preview').classList.toggle('hidden', job.kind === 'image');
+    $('image-preview').classList.toggle('hidden', job.kind !== 'image');
     if (playingPage !== page) {
       playingPage = page;
       $('preview').pause();
       $('preview').removeAttribute('src');
       $('preview').load();
+      $('image-preview').removeAttribute('src');
       window.mmax.video(job.id).then(url => {
-        if (playingPage === page) $('preview').src = url;
+        if (playingPage === page) $(job.kind === 'image' ? 'image-preview' : 'preview').src = url;
       }).catch(error => {
         if (playingPage === page) { playingPage = null; message(error.message, true); }
       });
@@ -309,6 +348,8 @@ function render(state) {
     $('preview').pause();
     $('preview').removeAttribute('src');
     $('preview').classList.add('hidden');
+    $('image-preview').classList.add('hidden');
+    $('image-preview').removeAttribute('src');
     $('preview-empty').classList.remove('hidden');
     $('preview-empty').querySelector('strong').textContent = job ? statusText(job) : '你的作品将出现在这里';
     $('preview-empty').querySelector('span').textContent = job?.error || (job ? '生成过程和输出文件保存在工作区。' : '生成完成后，可在此播放或在工作区查看文件。');
@@ -346,6 +387,16 @@ async function action(callback) {
 }
 
 $('prompt').addEventListener('input', updatePromptCount);
+$('kind').addEventListener('change', () => {
+  const image = $('kind').value === 'image';
+  $('width').value = image ? '1024' : '640';
+  $('height').value = image ? '1024' : '384';
+  $('duration').value = '5';
+  $('format').value = 'webm';
+  $('audio').value = 'on';
+  updateMediaControls();
+});
+$('image-preview').addEventListener('error', () => message('图片预览失败，请检查作品文件。', true));
 $('preset').addEventListener('change', event => {
   if (event.target.value === 'custom') return;
   const [width, height] = event.target.value.split('x');

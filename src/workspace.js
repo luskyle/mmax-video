@@ -25,15 +25,19 @@ function readJson(file) {
 
 function validateSettings(settings, forGeneration = false) {
   if (!settings || typeof settings !== 'object') throw new Error('生成设置无效。');
-  const maxSize = forGeneration ? 1344 : 1920;
+  const image = settings.kind === 'image';
+  if (settings.kind !== undefined && !['image', 'video'].includes(settings.kind)) throw new Error('画面类型无效。');
+  const maxSize = image ? 2048 : forGeneration ? 1344 : 1920;
+  const minSize = image ? 512 : 256;
   for (const key of ['width', 'height']) {
-    if (!Number.isInteger(settings[key]) || settings[key] < 256 || settings[key] > maxSize || settings[key] % 32 !== 0) {
-      throw new Error(`宽度和高度必须是 256 到 ${maxSize} 之间的 32 的倍数。`);
+    if (!Number.isInteger(settings[key]) || settings[key] < minSize || settings[key] > maxSize || settings[key] % 32 !== 0) {
+      throw new Error(`宽度和高度必须是 ${minSize} 到 ${maxSize} 之间的 32 的倍数。`);
     }
   }
   if (!Number.isInteger(settings.seed) || settings.seed < -1 || settings.seed > 2147483647) {
     throw new Error('种子必须是 -1 或 0 到 2147483647 之间的整数。');
   }
+  if (image) return { kind: 'image', width: settings.width, height: settings.height, seed: settings.seed, duration: 0, format: 'png', audio: false };
   const { duration = DEFAULTS.duration, format = DEFAULTS.format, audio = DEFAULTS.audio } = settings;
   if (!(forGeneration ? [5, 10, 14] : [5, 10, 14, 15]).includes(duration)) {
     throw new Error(forGeneration ? '视频时长必须为 5、10 或 14 秒；旧的 15 秒记录仍可查看。' : '视频时长无效。');
@@ -92,7 +96,7 @@ function findFfmpeg(root, custom = '') {
   };
 }
 
-function inspectModelRoot(modelRoot, inputOptions = deployment.DEFAULT_OPTIONS) {
+function inspectModelRoot(modelRoot, inputOptions = deployment.DEFAULT_OPTIONS, image = false) {
   const options = deployment.validateOptions(inputOptions);
   let root;
   try {
@@ -103,7 +107,7 @@ function inspectModelRoot(modelRoot, inputOptions = deployment.DEFAULT_OPTIONS) 
     }
     throw error;
   }
-  const ffmpeg = findFfmpeg(root, options.ffmpeg);
+  const ffmpeg = image ? { file: null } : findFfmpeg(root, options.ffmpeg);
   const files = {
     script: path.join(root, 'generate.sh'),
     deploy: path.join(root, 'deploy.py'),
@@ -113,10 +117,12 @@ function inspectModelRoot(modelRoot, inputOptions = deployment.DEFAULT_OPTIONS) 
   for (const file of [files.script, files.deploy]) {
     if (!isFile(file)) missing.push(file);
   }
-  if (!files.ffmpeg) missing.push(ffmpeg.error);
+  if (!image && !files.ffmpeg) missing.push(ffmpeg.error);
   if (isFile(files.script) && isFile(files.deploy)) {
-    const output = path.join(os.tmpdir(), `mmax-check-${crypto.randomUUID()}.webm`);
-    const result = spawnSync('python3', [files.deploy, 'generate', 'MMax deployment check', output, '--profile', options.profile, '--steps', String(options.steps), '--dry-run'], {
+    const output = path.join(os.tmpdir(), `mmax-check-${crypto.randomUUID()}.${image ? 'png' : 'webm'}`);
+    const args = image ? ['generate-image', 'MMax image check', output, '--dry-run'] :
+      ['generate', 'MMax deployment check', output, '--profile', options.profile, '--steps', String(options.steps), '--dry-run'];
+    const result = spawnSync('python3', [files.deploy, ...args], {
       cwd: root, env: deployment.environment(root, options), encoding: 'utf8', timeout: 10000
     });
     if (result.error) {
@@ -137,8 +143,8 @@ function inspectModelRoot(modelRoot, inputOptions = deployment.DEFAULT_OPTIONS) 
   return { root, files, missing };
 }
 
-function modelFiles(modelRoot, options) {
-  const status = inspectModelRoot(modelRoot, options);
+function modelFiles(modelRoot, options, image = false) {
+  const status = inspectModelRoot(modelRoot, options, image);
   if (status.missing.length) throw new Error(`缺少运行文件：${status.missing.join('、')}`);
   return { root: status.root, ...status.files };
 }
@@ -229,6 +235,7 @@ function reconcileJobs(workspace) {
 }
 
 function videoFilename(job) {
+  if (job.kind === 'image') return 'image.png';
   const { format } = validateSettings(job);
   return `video.${format}`;
 }
@@ -307,14 +314,15 @@ class Generator {
     }
     prompt = validatePrompt(prompt);
     const settings = validateSettings(input, true);
+    const image = settings.kind === 'image';
     const options = deployment.validateOptions(this.options);
-    const { root: modelRoot, script, ffmpeg, model } = modelFiles(this.modelRoot, options);
+    const { root: modelRoot, script, ffmpeg, model } = modelFiles(this.modelRoot, options, image);
     const id = crypto.randomUUID();
     const dir = jobDir(workspace, id);
     fs.mkdirSync(dir);
     const job = {
-      id, prompt, ...settings, frames: framesForDuration(settings.duration), fps: FPS,
-      profile: options.profile, steps: options.steps, model,
+      id, prompt, ...settings, frames: image ? 1 : framesForDuration(settings.duration), fps: image ? 0 : FPS,
+      profile: image ? 'image' : options.profile, steps: image ? 6 : options.steps, model,
       status: 'running', stage: 'preparing', samplingStep: 0, phase: '加载模型与提示词', createdAt: new Date().toISOString()
     };
     writeJson(path.join(dir, 'job.json'), job);
@@ -341,7 +349,7 @@ class Generator {
       let stage = job.stage;
       let samplingStep = job.samplingStep;
       if (buffer.includes('sampling completed')) {
-        phase = '解码视频和音频';
+        phase = job.kind === 'image' ? '解码图片' : '解码视频和音频';
         stage = 'decoding';
         samplingStep = job.steps;
       }
@@ -359,15 +367,25 @@ class Generator {
         update();
       }
     };
-    const raw = path.join(dir, 'original.webm');
+    const image = job.kind === 'image';
+    const raw = path.join(dir, image ? 'image.png' : 'original.webm');
     const final = path.join(dir, videoFilename(job));
     try {
       const env = { ...deployment.environment(modelRoot, options), TMPDIR: dir };
-      await runProcess('bash', [script, '--profile', job.profile, '--steps', String(job.steps), '--width', String(job.width), '--height', String(job.height),
-        '--video-frames', String(job.frames), '--seed', String(job.seed), '--', job.prompt, raw],
+      const args = image ? [path.join(modelRoot, 'deploy.py'), 'generate-image', '--width', String(job.width), '--height', String(job.height),
+        '--seed', String(job.seed), '--', job.prompt, raw] :
+        [script, '--profile', job.profile, '--steps', String(job.steps), '--width', String(job.width), '--height', String(job.height),
+          '--video-frames', String(job.frames), '--seed', String(job.seed), '--', job.prompt, raw];
+      await runProcess(image ? 'python3' : 'bash', args,
       { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] }, log, onOutput, setPid);
       if (logError) throw logError;
-      if (!fs.existsSync(raw) || fs.statSync(raw).size === 0) throw new Error('推理结束但没有生成视频。');
+      if (!fs.existsSync(raw) || fs.statSync(raw).size === 0) throw new Error('推理结束但没有生成输出文件。');
+      if (image) {
+        job.status = 'completed';
+        job.stage = 'completed';
+        job.phase = '图片已生成';
+        return;
+      }
       job.phase = `导出 ${job.format.toUpperCase()}${job.audio ? '（含声音）' : '（仅画面）'}`;
       job.stage = 'encoding';
       update();

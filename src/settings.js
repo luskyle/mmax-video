@@ -5,7 +5,8 @@ const pathFields = [
   ['model_dir', '模型目录'], ['runtime_dir', '运行与生成锁目录'],
   ['source_dir', '引擎源码目录'], ['build_dir', 'CUDA 构建目录'],
   ['sd_cli', 'sd-cli 推理器'], ['diffusion_model', '扩散模型（须匹配预设）'],
-  ['text_encoder', '文本编码器'], ['video_vae', '视频 VAE'], ['audio_vae', '音频 VAE']
+  ['text_encoder', '文本编码器（视频／图片共用）'], ['video_vae', '视频 VAE'], ['audio_vae', '音频 VAE'],
+  ['image_model', 'MiniMax-H3-Image 图片模型'], ['image_vae', '独立图片 VAE']
 ];
 const fields = [
   ...pathFields.map(([key, label]) => ({ key: `MINIMAX_H3_${key.toUpperCase()}`, label, resolved: key })),
@@ -60,7 +61,7 @@ function updateControls() {
   for (const id of ['profile', ...fields.map(field => field.key), 'build-jobs', 'download-profile', 'accept-license', 'clear-overrides']) $(id).disabled = locked;
   $('steps').disabled = locked || $('profile').value === 'hyperflow';
   for (const id of ['save', 'discard']) $(id).disabled = locked || !saved || !dirty();
-  for (const id of ['choose-model', 'refresh', 'doctor', 'checksum', 'build', 'download']) $(id).disabled = locked || dirty();
+  for (const id of ['choose-model', 'refresh', 'doctor', 'checksum', 'image-doctor', 'build', 'download']) $(id).disabled = locked || dirty();
   $('download').disabled ||= !$('accept-license').checked;
   $('back').disabled = busy;
   $('save-state').textContent = dirty() ? '有未保存修改；请保存后再执行操作' : '已保存';
@@ -104,13 +105,17 @@ function renderStatus(status, fill = false) {
   $('model-status').textContent = ready ? `配置检查通过（尚未验证显存或模型 SHA256）。模型：${status.files.model}；FFmpeg：${status.files.ffmpeg}` : `未就绪：${status.missing.join('；')}`;
   $('model-status').classList.toggle('ready', ready);
   $('model-status').classList.toggle('error', !ready);
+  const image = status.imageStatus;
+  $('image-status').textContent = image?.missing.length === 0 ? '图片生成配置就绪：MiniMax-H3-Image · PNG · 固定六步（不使用视频 VAE 或 FFmpeg）。' :
+    `图片生成未就绪：${image?.missing.join('；') || '请更新部署项目'}`;
+  $('image-status').classList.toggle('ready', image?.missing.length === 0);
   for (const field of fields) {
     const effective = field.key === 'ffmpeg' ? status.files.ffmpeg : status.configuration?.settings[field.resolved];
     $(`effective-${field.key}`).textContent = effective ? `实际：${effective}` : '';
   }
   const caps = status.configuration?.capabilities;
   $('capabilities').textContent = caps
-    ? `CUDA · ${caps.fps} fps · 宽高 ${caps.width_height.min}–${caps.width_height.max}（${caps.width_height.multiple} 的倍数）· ${caps.frames.min}–${caps.frames.max} 帧 · 提示词 ${caps.max_prompt_characters} 字符。UI 导出 5／10／14 秒；音频始终参与推理。引擎版本：${status.configuration.engine_commit}`
+    ? `CUDA · 视频：${caps.fps} fps · 宽高 ${caps.width_height.min}–${caps.width_height.max}（${caps.width_height.multiple} 的倍数）· ${caps.frames.min}–${caps.frames.max} 帧 · 提示词 ${caps.max_prompt_characters} 字符。视频导出 5／10／14 秒，音频始终参与视频推理。图片：512–2048，固定六步，PNG。引擎版本：${status.configuration.engine_commit}`
     : '无法读取部署能力，请检查根目录或更新 minimax-deploy。';
   renderOperation(status.operation);
 }
@@ -160,10 +165,10 @@ $('back').addEventListener('click', () => {
 for (const [id, target] of [['show-readme', 'readme'], ['show-config', 'config'], ['show-log', 'log']]) {
   $(id).addEventListener('click', () => window.mmax.showDeploymentFile(target).catch(error => message(error.message, true)));
 }
-for (const [id, name] of [['doctor', 'doctor'], ['checksum', 'doctor'], ['build', 'build'], ['download', 'download']]) {
+for (const [id, name] of [['doctor', 'doctor'], ['checksum', 'doctor'], ['image-doctor', 'doctor'], ['build', 'build'], ['download', 'download']]) {
   $(id).addEventListener('click', () => action(async () => {
     renderOperation(await window.mmax.deploymentOperation(name, {
-      checksum: id === 'checksum', jobs: Number($('build-jobs').value),
+      checksum: id === 'checksum', image: id === 'image-doctor', jobs: Number($('build-jobs').value),
       profile: $('download-profile').value, acceptLicense: $('accept-license').checked
     }));
   }));

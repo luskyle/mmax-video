@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' file:; img-src 'self' data:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' file:; img-src 'self' file: data:">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MMax Video Studio</title>
   <link rel="stylesheet" href="style.css">
@@ -67,12 +67,15 @@
       <div class="scene-heading"><h2 id="scene-title">新建画面</h2><span id="scene-status" class="muted"></span></div>
       <div class="card form">
         <p id="deployment-summary" class="muted"></p>
+        <label for="kind">创作类型</label>
+        <select id="kind"><option value="video">视频 · MiniMax H3</option><option value="image">图片 · MiniMax-H3-Image</option></select>
+        <p id="image-hint" class="hint hidden">图片使用独立模型，固定 6 步，输出单张 PNG；不生成音频。首次使用请在设置中下载图片模型。</p>
         <label for="prompt">提示词</label>
         <textarea id="prompt" maxlength="14000" placeholder="例如：A giant panda walks through a lush bamboo forest after rain..."></textarea>
         <div class="prompt-footer"><span>画面越具体，结果通常越可控</span><span id="prompt-count">0 / 7000</span></div>
         <div class="divider"></div>
         <div class="settings">
-          <div><label for="preset">视频尺寸</label><select id="preset"><option value="640x384">640 × 384 · 快速</option><option value="960x544">960 × 544 · 清晰</option><option value="1088x608">1088 × 608 · 高清</option><option value="custom">自定义</option></select></div>
+          <div><label for="preset">画面尺寸</label><select id="preset"><option value="640x384">640 × 384 · 快速</option><option value="960x544">960 × 544 · 清晰</option><option value="1088x608">1088 × 608 · 高清</option><option value="custom">自定义</option></select></div>
           <div><label for="width">宽度</label><input id="width" type="number" min="256" max="1344" step="32" value="640"></div>
           <div><label for="height">高度</label><input id="height" type="number" min="256" max="1344" step="32" value="384"></div>
           <div><label for="seed">种子</label><input id="seed" type="number" min="-1" max="2147483647" value="-1"></div>
@@ -82,7 +85,7 @@
           <div><label for="format">视频格式</label><select id="format"><option value="webm">WebM</option><option value="mp4">MP4</option></select></div>
           <div><label for="audio">声音</label><select id="audio"><option value="on">有声视频</option><option value="off">无声视频（仅画面）</option></select></div>
         </div>
-        <p class="hint">宽高须为 256–1344 的 32 的倍数；-1 表示随机。旧的 15 秒及大尺寸记录仍可查看，但不能用于新任务。时长和分辨率越大，耗时和显存需求越高。无声模式移除成片音轨，不减少音频推理开销。</p>
+        <p class="hint">宽高须为 32 的倍数：视频 256–1344，图片 512–2048；-1 表示随机。旧的 15 秒及大尺寸视频仍可查看，但不能用于新任务。更大画布可能显存不足；无声模式只移除成片音轨。</p>
         <div class="bottom-actions">
           <button id="generate" class="primary" title="使用当前画面的提示词和选项生成视频">
             <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9 3 2.5 6.5L18 12l-6.5 2.5L9 21l-2.5-6.5L0 12l6.5-2.5zM20 2v6M17 5h6"/></svg>
@@ -92,7 +95,7 @@
       </div>
       <div class="card result">
         <div class="title-row">
-          <div><div class="section-label">OUTPUT</div><h2>视频预览</h2></div>
+          <div><div class="section-label">OUTPUT</div><h2>作品预览</h2></div>
           <div class="result-actions">
             <button id="show-video" class="secondary icon-button" aria-label="显示文件" title="在文件管理器中定位视频" disabled>
               <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>
@@ -101,6 +104,7 @@
         </div>
         <div id="preview-empty" class="preview-empty"><div class="play-icon">▶</div><strong>你的作品将出现在这里</strong><span>生成完成后，可在此播放或在工作区查看文件。</span></div>
         <video id="preview" controls class="hidden"></video>
+        <img id="image-preview" class="hidden image-preview" alt="MiniMax-H3-Image 生成的图片">
         <div id="job-detail" class="job-detail hidden"></div>
       </div>
       </div>
@@ -148,6 +152,7 @@
         </div>
         <div class="timeline-media">
           <video controls preload="metadata" class="hidden"></video>
+          <img class="hidden" alt="生成的图片">
           <div class="timeline-placeholder"></div>
         </div>
         <div class="timeline-details"><p class="timeline-meta"></p><time></time><p class="timeline-status"></p></div>

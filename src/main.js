@@ -52,7 +52,8 @@ function deploymentStatus() {
   let configuration = null;
   try { configuration = deployment.inspect(modelRoot, deploymentOptions); }
   catch (error) { status.missing.push(error.message); }
-  return { ...status, configuration, options: deploymentOptions, operation: deploymentTask.state };
+  const imageStatus = workspaceApi.inspectModelRoot(modelRoot, deploymentOptions, true);
+  return { ...status, imageStatus, configuration, options: deploymentOptions, operation: deploymentTask.state };
 }
 
 function ensureIdle() {
@@ -64,7 +65,7 @@ async function deleteRecord(current, id) {
   const result = await dialog.showMessageBox(window, {
     type: 'warning',
     title: '删除创作记录',
-    message: '删除这条创作记录及其视频、原始文件和日志？',
+    message: '删除这条创作记录及其作品、原始文件和日志？',
     detail: '删除后无法恢复，其他创作记录不受影响。',
     buttons: ['取消', '删除记录和文件'],
     defaultId: 0,
@@ -118,7 +119,9 @@ function registerHandlers() {
         type: 'warning',
         message: action === 'download' ? '确认下载并校验模型？' : '确认构建 CUDA 推理器？',
         detail: action === 'download'
-          ? '下载将写入当前模型目录，单套约 31–33 GiB。请先阅读部署项目 README 的模型许可证。损坏文件不会被自动覆盖。'
+          ? input.profile === 'image'
+            ? '图片权重与图片 VAE 新增约 13 GiB，可复用文本编码器。MiniMax-H3-Image 有独立许可证和地域限制；对外托管或年收入超过 100 万美元需额外授权。请确认已阅读许可证并具备使用资格。'
+            : '下载将写入当前模型目录，单套约 31–33 GiB。请先阅读部署项目 README 的模型许可证。损坏文件不会被自动覆盖。'
           : '将拉取固定版本引擎并编译，可能耗时较长。不会安装系统依赖或修改驱动；已有源码修改会导致构建拒绝。',
         buttons: ['取消', '确认执行'], defaultId: 0, cancelId: 0
       });
