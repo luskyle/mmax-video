@@ -83,10 +83,40 @@ Electron 下载受网络影响时可使用
 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm run install:electron`。
 需要 Linux 图形桌面。首次启动后，点击「设置」并选择包含
 `generate.sh` 和 `deploy.py` 的 [MiniMax 部署项目](https://github.com/luskyle/minimax-deploy)根目录；
-选择会保存在应用设置中。先按该项目说明构建 CUDA 推理器并下载 `hyperflow` 模型。
+选择会保存在应用设置中。部署项目需支持 `deploy.py inspect`（JSON schema 1）；
+旧版本需先更新。先按该项目说明准备 CUDA Toolkit 和驱动，再构建推理器并下载所选预设模型。
 模型和推理器不包含在本项目中。FFmpeg 可放在安装目录的
 `build-deps/root/usr/bin/ffmpeg`，也可安装到系统 `PATH`；导出 MP4 需要 H.264/AAC
 编码器，有声 WebM 需要 Opus 编码器。
+
+## 部署设置
+
+- **生成预设**：默认 HyperFlow，固定 6 步、Euler 和匹配 sigma；Standard 支持 1–20 步，
+  切换时默认 20 步。应用使用显式预设，不继承部署配置中的 `profile`。
+  新任务记录自己的预设、步数和扩散模型路径，切换设置不改写历史视频。
+- **路径覆盖**：模型目录、源码／构建目录、sd-cli、运行锁目录、扩散模型、
+  文本编码器、视频／音频 VAE 和 FFmpeg。路径下方展示部署入口解析后的实际值。
+  FFmpeg 留空自动检测；显式指定但不可用时会报错，不静默换成其他程序。
+- **构建与下载环境**：CUDA_HOME、CUDA 架构列表和 HTTPS 模型下载端点。
+  留空继承启动应用时的环境及部署配置；相对路径以部署根目录为基准。
+- **保存范围**：保存在 Electron 用户设置目录的 `model-root.json`，只影响桌面应用的后续
+  生成和部署操作，不写入 `config.local.json` 或系统环境，不改变 CLI／HTTP API／MCP 客户端。
+  同一目录的设置跨重启保留；切换到另一个部署根目录时重置为 HyperFlow 并清除覆盖值，
+  避免把上一个安装的路径用于新部署。旧的仅包含根目录的配置继续兼容。
+- **检查与维护**：刷新执行无 GPU 的 inspect／dry-run，并检查 FFmpeg 能否启动；
+  「环境诊断」调用 doctor，查看 CUDA 设备、显存、内存、磁盘及模型大小。
+  「完整 SHA256 校验」额外读取模型内容，可能耗时较长。
+  「构建 CUDA 引擎」和「下载／校验模型」需再次确认，下载前必须阅读并勾选模型许可证。
+  单套模型约 31–33 GiB，两套共享编码器和 VAE。下载按模型目录保存，不按单文件覆盖路径保存。
+  应用不安装系统软件、不修改驱动、不结束其他 GPU 程序。
+- **日志与互斥**：部署操作异步运行，界面展示最近日志，完整日志在应用用户设置目录的
+  `deployment.log`（每次新操作覆盖）。失败显示退出状态和日志，不冒充成功。
+  操作期间不能生成、修改配置、切换工作区或关闭窗口；返回创作页后可重新进入设置查看进度。
+
+桌面 UI 仍直接调用 CLI，无需启动 HTTP 服务或输入云端 API Key。
+HTTP API 和 MCP 的启动、鉴权由其各自客户端管理，本页不会开放网络端口。
+首帧／尾帧输入目前通过部署 CLI／HTTP API 使用，创作页暂未提供图片选择器。
+设置页提示不兼容时请更新部署项目；运行中的旧版应用需关闭并重新启动。
 
 ## 使用
 
@@ -130,11 +160,11 @@ H.264，有声模式使用 AAC，便于兼容常见播放器。无声成片不�
 历史 15 秒或超过 1344 的记录仍可查看，但不能按原参数新建任务；如果旧工作区的默认
 参数超出范围，请先选择支持的时长和尺寸。
 
-应用直接调用本机 `generate.sh --profile hyperflow`，不需要启动 HTTP API；
-部署入口使用 CUDA 和 HyperFlow H3 Flash Q4 模型，固定 6 步、24 fps，
+应用直接调用本机 `generate.sh --profile <预设> --steps <步数>`，不需要启动 HTTP API；
+部署入口使用 CUDA，固定 24 fps，
 并负责解析 `config.local.json` 和 `MINIMAX_H3_*` 路径配置。设置页面通过
 `deploy.py generate --dry-run` 检查推理器和必需模型，不加载 GPU、不检查显存或模型校验和；
-自定义扩散模型须自行确认与 HyperFlow 预设兼容。
+自定义扩散模型须自行确认与所选预设兼容。
 H3 帧数必须满足 `17n+5`：5／10／14 秒分别请求 124／243／345 帧，
 随后裁剪成片到所选时长（音频编码可能带来毫秒级封装时差）。
 部署入口上限为 345 帧，因此不能生成完整 15 秒。
@@ -158,7 +188,8 @@ npm run test:deb
 `package:linux` 只在 Linux x64 上运行，将应用、Electron 运行时、第三方许可和说明文档打包到 `dist/`，
 同时生成 `.tar.gz`、`.deb` 和 SHA-256 校验文件；不会打包工作区、模型、用户配置或依赖开发工具。
 `test:smoke` 启动打包后的真实应用，使用独立临时工作区和模拟推理器验证旧记录、生成选项、
-画布、缩放、拖拽、草稿和设置页面，不会触发 GPU 推理。`test:deb` 在隔离目录测试 dpkg 安装、启动和卸载，不修改系统软件包。
+画布、缩放、拖拽、草稿、设置保存与维护操作，不会触发 GPU 推理或下载真实模型。
+`test:deb` 在隔离目录测试 dpkg 安装、启动和卸载，不修改系统软件包。
 无图形会话时分别使用 `xvfb-run -a npm run test:smoke` 和 `xvfb-run -a npm run test:deb`。
 
 ## CI / CD 与 GitHub Pages

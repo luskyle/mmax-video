@@ -4,18 +4,22 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron')
 const fs = require('node:fs');
 const path = require('node:path');
 const workspaceApi = require('./workspace');
+const deployment = require('./deployment');
 
 const DEFAULT_MODEL_ROOT = path.join(app.getPath('home'), 'apps', 'minimax');
 let window;
 let workspace = null;
 let generator;
 let modelRoot = DEFAULT_MODEL_ROOT;
+let deploymentOptions = deployment.validateOptions();
+let deploymentTask;
 
 function state() {
-  if (!workspace) return { workspace: null, jobs: [], active: generator.active, modelRoot };
+  const deploymentState = { modelRoot, deploymentOptions, maintenance: deploymentTask.state };
+  if (!workspace) return { workspace: null, jobs: [], active: generator.active || deploymentTask.state.running, ...deploymentState };
   if (!generator.active) workspaceApi.reconcileJobs(workspace);
   const jobs = workspaceApi.loadJobs(workspace);
-  return { workspace, jobs, active: generator.active || jobs.some(job => job.status === 'running'), modelRoot };
+  return { workspace, jobs, active: generator.active || deploymentTask.state.running || jobs.some(job => job.status === 'running'), ...deploymentState };
 }
 
 function requireWorkspace() {
@@ -32,15 +36,27 @@ function loadModelRoot() {
   if (!fs.existsSync(file)) return DEFAULT_MODEL_ROOT;
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (!saved || typeof saved.root !== 'string' || !path.isAbsolute(saved.root)) throw new Error('保存的 MiniMax 路径无效。');
+  deploymentOptions = deployment.validateOptions(saved.options);
   return saved.root;
 }
 
-function rememberModelRoot(root) {
-  fs.writeFileSync(path.join(app.getPath('userData'), 'model-root.json'), JSON.stringify({ root }));
+function rememberModelRoot(root, options) {
+  const file = path.join(app.getPath('userData'), 'model-root.json');
+  const temporary = `${file}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify({ root, options }, null, 2));
+  fs.renameSync(temporary, file);
+}
+
+function deploymentStatus() {
+  const status = workspaceApi.inspectModelRoot(modelRoot, deploymentOptions);
+  let configuration = null;
+  try { configuration = deployment.inspect(modelRoot, deploymentOptions); }
+  catch (error) { status.missing.push(error.message); }
+  return { ...status, configuration, options: deploymentOptions, operation: deploymentTask.state };
 }
 
 function ensureIdle() {
-  if (state().active) throw new Error('画面正在生成，完成前不能新建画面、删除记录或切换工作区及 MiniMax 目录。');
+  if (state().active) throw new Error('生成或部署操作正在运行，请等待完成后再修改配置或工作区。');
 }
 
 async function deleteRecord(current, id) {
@@ -63,19 +79,59 @@ async function deleteRecord(current, id) {
 
 function registerHandlers() {
   ipcMain.handle('state', () => state());
-  ipcMain.handle('model:status', () => workspaceApi.inspectModelRoot(modelRoot));
+  ipcMain.handle('model:status', () => deploymentStatus());
   ipcMain.handle('model:choose', async () => {
     ensureIdle();
-    const options = { title: '选择 MiniMax 本地目录', properties: ['openDirectory'] };
-    if (fs.existsSync(modelRoot)) options.defaultPath = modelRoot;
-    const result = await dialog.showOpenDialog(window, options);
+    const dialogOptions = { title: '选择 MiniMax 本地目录', properties: ['openDirectory'] };
+    if (fs.existsSync(modelRoot)) dialogOptions.defaultPath = modelRoot;
+    const result = await dialog.showOpenDialog(window, dialogOptions);
     if (result.canceled) return state();
-    const selected = workspaceApi.modelFiles(result.filePaths[0]).root;
+    ensureIdle();
+    const selected = fs.realpathSync(result.filePaths[0]);
+    for (const name of ['generate.sh', 'deploy.py']) {
+      if (!fs.statSync(path.join(selected, name)).isFile()) throw new Error(`目录必须包含 ${name}。`);
+    }
     if (workspace) workspaceApi.workspaceAt(workspace.root, selected);
-    rememberModelRoot(selected);
+    const options = selected === modelRoot ? deploymentOptions : deployment.validateOptions();
+    rememberModelRoot(selected, options);
     modelRoot = selected;
+    deploymentOptions = options;
     generator.modelRoot = selected;
+    generator.options = options;
     return state();
+  });
+  ipcMain.handle('model:save', (_event, input) => {
+    ensureIdle();
+    const options = deployment.validateOptions(input);
+    deployment.inspect(modelRoot, options);
+    rememberModelRoot(modelRoot, options);
+    deploymentOptions = options;
+    generator.options = options;
+    return deploymentStatus();
+  });
+  ipcMain.handle('model:operation', async (_event, action, input) => {
+    ensureIdle();
+    if (!['doctor', 'build', 'download'].includes(action)) throw new Error('不支持的部署操作。');
+    if (action === 'download' || action === 'build') {
+      if (action === 'download' && input?.acceptLicense !== true) throw new Error('请先阅读并确认模型许可证。');
+      const result = await dialog.showMessageBox(window, {
+        type: 'warning',
+        message: action === 'download' ? '确认下载并校验模型？' : '确认构建 CUDA 推理器？',
+        detail: action === 'download'
+          ? '下载将写入当前模型目录，单套约 31–33 GiB。请先阅读部署项目 README 的模型许可证。损坏文件不会被自动覆盖。'
+          : '将拉取固定版本引擎并编译，可能耗时较长。不会安装系统依赖或修改驱动；已有源码修改会导致构建拒绝。',
+        buttons: ['取消', '确认执行'], defaultId: 0, cancelId: 0
+      });
+      if (result.response !== 1) return deploymentTask.state;
+    }
+    ensureIdle();
+    return deploymentTask.start(modelRoot, deploymentOptions, action, input);
+  });
+  ipcMain.handle('model:operation-status', () => deploymentTask.state);
+  ipcMain.handle('model:show', (_event, target) => {
+    const files = { readme: path.join(modelRoot, 'README.md'), config: path.join(modelRoot, 'config.local.json'), log: deploymentTask.logFile };
+    if (!Object.hasOwn(files, target) || !fs.existsSync(files[target])) throw new Error('文件不存在。');
+    shell.showItemInFolder(files[target]);
   });
   ipcMain.handle('page:settings', () => window.loadFile(path.join(__dirname, 'settings.html')));
   ipcMain.handle('page:home', () => window.loadFile(path.join(__dirname, 'index.html')));
@@ -105,6 +161,7 @@ function registerHandlers() {
     return state();
   });
   ipcMain.handle('generation:start', (_event, prompt, settings) => {
+    ensureIdle();
     const job = generator.start(requireWorkspace(), prompt, settings);
     return { ...state(), startedId: job.id };
   });
@@ -113,7 +170,7 @@ function registerHandlers() {
     const snapshot = state();
     if (!snapshot.jobs.some(job => job.id === id)) throw new Error('找不到创作记录。');
     Menu.buildFromTemplate([{
-      label: snapshot.active ? '生成期间不能删除记录' : '删除创作记录…',
+      label: snapshot.active ? '生成或部署操作期间不能删除记录' : '删除创作记录…',
       enabled: !snapshot.active,
       click: () => deleteRecord(current, id).catch(error => {
         window.webContents.send('generation:event', { type: 'error', message: error.message });
@@ -137,6 +194,10 @@ if (!app.requestSingleInstanceLock()) {
     generator = new workspaceApi.Generator(modelRoot, event => {
       if (window && !window.isDestroyed()) window.webContents.send('generation:event', event);
     });
+    generator.options = deploymentOptions;
+    deploymentTask = new deployment.DeploymentTask(path.join(app.getPath('userData'), 'deployment.log'), () => {
+      if (window && !window.isDestroyed()) window.webContents.send('deployment:event', deploymentTask.state);
+    });
     registerHandlers();
     window = new BrowserWindow({
       width: 1260, height: 850, minWidth: 900, minHeight: 680,
@@ -153,9 +214,9 @@ if (!app.requestSingleInstanceLock()) {
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', event => event.preventDefault());
     window.on('close', event => {
-      if (generator.active) {
+      if (generator.active || deploymentTask.state.running) {
         event.preventDefault();
-        dialog.showMessageBox(window, { type: 'info', message: '视频正在生成，请等待任务完成后再关闭应用。' });
+        dialog.showMessageBox(window, { type: 'info', message: '生成或部署操作正在运行，请等待完成后再关闭应用。' });
       }
     });
     const last = path.join(app.getPath('userData'), 'last-workspace.json');

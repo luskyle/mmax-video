@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
+const deployment = require('./deployment');
 
 const MARKER = '.mmax-workspace.json';
 const DEFAULTS = { width: 640, height: 384, seed: -1, duration: 5, format: 'webm', audio: true };
@@ -74,9 +75,10 @@ function ffmpegEnvironment(root, ffmpeg, tmpdir) {
   return env;
 }
 
-function findFfmpeg(root) {
+function findFfmpeg(root, custom = '') {
   const bundled = path.join(root, 'build-deps/root/usr/bin/ffmpeg');
-  const candidates = new Set([bundled, ...(process.env.PATH || '').split(path.delimiter).filter(Boolean).map(dir => path.resolve(dir, 'ffmpeg'))]);
+  const candidates = new Set(custom ? [deployment.resolvePath(root, custom)] :
+    [bundled, ...(process.env.PATH || '').split(path.delimiter).filter(Boolean).map(dir => path.resolve(dir, 'ffmpeg'))]);
   const failures = [];
   for (const file of candidates) {
     if (!isFile(file, true)) continue;
@@ -86,11 +88,12 @@ function findFfmpeg(root) {
   }
   return {
     file: null,
-    error: failures.length ? `FFmpeg 无法运行：${failures.join('；')}` : 'FFmpeg（请安装到 PATH 或放入 build-deps/root/usr/bin/ffmpeg）'
+    error: failures.length ? `FFmpeg 无法运行：${failures.join('；')}` : custom ? `FFmpeg 不存在或不可执行：${custom}` : 'FFmpeg（请安装到 PATH 或放入 build-deps/root/usr/bin/ffmpeg）'
   };
 }
 
-function inspectModelRoot(modelRoot) {
+function inspectModelRoot(modelRoot, inputOptions = deployment.DEFAULT_OPTIONS) {
+  const options = deployment.validateOptions(inputOptions);
   let root;
   try {
     root = fs.realpathSync(modelRoot);
@@ -100,7 +103,7 @@ function inspectModelRoot(modelRoot) {
     }
     throw error;
   }
-  const ffmpeg = findFfmpeg(root);
+  const ffmpeg = findFfmpeg(root, options.ffmpeg);
   const files = {
     script: path.join(root, 'generate.sh'),
     deploy: path.join(root, 'deploy.py'),
@@ -113,8 +116,8 @@ function inspectModelRoot(modelRoot) {
   if (!files.ffmpeg) missing.push(ffmpeg.error);
   if (isFile(files.script) && isFile(files.deploy)) {
     const output = path.join(os.tmpdir(), `mmax-check-${crypto.randomUUID()}.webm`);
-    const result = spawnSync('python3', [files.deploy, 'generate', 'MMax deployment check', output, '--profile', 'hyperflow', '--dry-run'], {
-      cwd: root, env: { ...process.env, MINIMAX_H3_BACKEND: 'cuda' }, encoding: 'utf8', timeout: 10000
+    const result = spawnSync('python3', [files.deploy, 'generate', 'MMax deployment check', output, '--profile', options.profile, '--steps', String(options.steps), '--dry-run'], {
+      cwd: root, env: deployment.environment(root, options), encoding: 'utf8', timeout: 10000
     });
     if (result.error) {
       missing.push(`部署检查无法运行：${result.error.message}`);
@@ -134,8 +137,8 @@ function inspectModelRoot(modelRoot) {
   return { root, files, missing };
 }
 
-function modelFiles(modelRoot) {
-  const status = inspectModelRoot(modelRoot);
+function modelFiles(modelRoot, options) {
+  const status = inspectModelRoot(modelRoot, options);
   if (status.missing.length) throw new Error(`缺少运行文件：${status.missing.join('、')}`);
   return { root: status.root, ...status.files };
 }
@@ -293,6 +296,7 @@ class Generator {
     this.modelRoot = modelRoot;
     this.notify = notify;
     this.active = false;
+    this.options = deployment.validateOptions();
   }
 
   start(workspace, prompt, input) {
@@ -303,24 +307,26 @@ class Generator {
     }
     prompt = validatePrompt(prompt);
     const settings = validateSettings(input, true);
-    const { root: modelRoot, script, ffmpeg } = modelFiles(this.modelRoot);
+    const options = deployment.validateOptions(this.options);
+    const { root: modelRoot, script, ffmpeg, model } = modelFiles(this.modelRoot, options);
     const id = crypto.randomUUID();
     const dir = jobDir(workspace, id);
     fs.mkdirSync(dir);
     const job = {
       id, prompt, ...settings, frames: framesForDuration(settings.duration), fps: FPS,
+      profile: options.profile, steps: options.steps, model,
       status: 'running', stage: 'preparing', samplingStep: 0, phase: '加载模型与提示词', createdAt: new Date().toISOString()
     };
     writeJson(path.join(dir, 'job.json'), job);
     this.active = true;
-    this.execute(workspace, job, dir, modelRoot, script, ffmpeg).catch(error => {
+    this.execute(workspace, job, dir, modelRoot, script, ffmpeg, options).catch(error => {
       console.error('Unable to finalize generation:', error);
       this.notify({ type: 'error', message: `任务状态保存失败：${error.message}` });
     }).finally(() => { this.active = false; this.notify({ type: 'changed' }); });
     return job;
   }
 
-  async execute(workspace, job, dir, modelRoot, script, ffmpeg) {
+  async execute(workspace, job, dir, modelRoot, script, ffmpeg, options) {
     const metadata = path.join(dir, 'job.json');
     const log = fs.createWriteStream(path.join(dir, 'generation.log'), { flags: 'a' });
     let logError;
@@ -337,13 +343,13 @@ class Generator {
       if (buffer.includes('sampling completed')) {
         phase = '解码视频和音频';
         stage = 'decoding';
-        samplingStep = 6;
+        samplingStep = job.steps;
       }
       else {
-        const matches = [...buffer.matchAll(/\|\s*(\d+)\/6\s*-\s*[\d.]+\s*(?:s\/it|it\/s)/g)];
+        const matches = [...buffer.matchAll(new RegExp(`\\|\\s*(\\d+)\\/${job.steps}\\s*-\\s*[\\d.]+\\s*(?:s/it|it/s)`, 'g'))];
         if (matches.length && stage !== 'decoding') {
-          samplingStep = Math.min(6, Math.max(samplingStep, ...matches.map(match => Number(match[1]))));
-          phase = `采样 ${samplingStep}/6`;
+          samplingStep = Math.min(job.steps, Math.max(samplingStep, ...matches.map(match => Number(match[1]))));
+          phase = `采样 ${samplingStep}/${job.steps}`;
           stage = 'sampling';
         }
         else if (buffer.includes('generate_video ')) phase = '准备采样';
@@ -356,8 +362,8 @@ class Generator {
     const raw = path.join(dir, 'original.webm');
     const final = path.join(dir, videoFilename(job));
     try {
-      const env = { ...process.env, MINIMAX_H3_BACKEND: 'cuda', TMPDIR: dir };
-      await runProcess('bash', [script, '--profile', 'hyperflow', '--width', String(job.width), '--height', String(job.height),
+      const env = { ...deployment.environment(modelRoot, options), TMPDIR: dir };
+      await runProcess('bash', [script, '--profile', job.profile, '--steps', String(job.steps), '--width', String(job.width), '--height', String(job.height),
         '--video-frames', String(job.frames), '--seed', String(job.seed), '--', job.prompt, raw],
       { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] }, log, onOutput, setPid);
       if (logError) throw logError;

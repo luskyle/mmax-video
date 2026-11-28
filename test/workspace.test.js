@@ -175,7 +175,8 @@ test('duration, format and audio choices control inference and export arguments'
       assert.ok(frames >= settings.duration * 24 && frames < settings.duration * 24 + 17);
       assert.ok(frames <= 345);
       assert.equal(inference[inference.indexOf('--profile') + 1], 'hyperflow');
-      for (const flag of ['--fps', '--steps', '--sampling-method', '--sigmas']) assert.equal(inference.includes(flag), false);
+      assert.equal(inference[inference.indexOf('--steps') + 1], '6');
+      for (const flag of ['--fps', '--sampling-method', '--sigmas']) assert.equal(inference.includes(flag), false);
       assert.equal(exported[exported.indexOf('-t') + 1], String(settings.duration));
       assert.equal(exported[exported.indexOf('-c:v') + 1], settings.format === 'mp4' ? 'libx264' : 'copy');
       assert.equal(exported.includes('0:a:0'), settings.audio);
@@ -228,6 +229,32 @@ test('sampling progress survives split output and remains separate from decoding
   assert.ok(states.some(job => job.stage === 'decoding' && job.samplingStep === 6));
   assert.ok(states.some(job => job.stage === 'encoding' && job.status === 'running'));
   assert.equal(states.at(-1).stage, 'completed');
+});
+
+test('standard profile uses configured steps, paths and correct progress without changing old jobs', async t => {
+  const { root, model } = fixture(t);
+  fs.writeFileSync(path.join(model, 'deploy.py'),
+    'import json,sys,os\nassert sys.argv[sys.argv.index("--profile")+1] == "standard"\nassert os.environ["MINIMAX_H3_MODEL_DIR"] == "custom-models"\nprint(json.dumps(["sd-cli","--diffusion-model","/configured/standard.gguf"]))\n');
+  fs.writeFileSync(path.join(model, 'generate.sh'),
+    '#!/bin/bash\nprintf "%s\\n" "$@" > inference-args.txt\nprintf "| 10/20 - 1.0s/it\\r"\nsleep 0.04\nprintf "sampling completed\\n"\nprintf "raw" > "${@: -1}"\n');
+  fs.writeFileSync(path.join(model, 'build-deps/root/usr/bin/ffmpeg'),
+    '#!/bin/bash\nif [ "$1" = "-version" ]; then exit 0; fi\nprintf "video" > "${@: -1}"\n', { mode: 0o755 });
+  const workspace = createWorkspace(root, 'standard', model);
+  const states = [];
+  const generator = new Generator(model, () => states.push(loadJobs(workspace)[0]));
+  generator.options = { profile: 'standard', steps: 20, env: { MINIMAX_H3_MODEL_DIR: 'custom-models' }, ffmpeg: '' };
+  const job = generator.start(workspace, 'scene', DEFAULTS);
+  generator.options = { profile: 'hyperflow', steps: 6, env: {}, ffmpeg: '' };
+  await waitForCompletion(generator);
+  assert.ok(states.some(item => item.samplingStep === 10 && item.phase === '采样 10/20'));
+  const finished = loadJobs(workspace)[0];
+  assert.equal(finished.status, 'completed');
+  assert.equal(finished.profile, 'standard');
+  assert.equal(finished.steps, 20);
+  assert.equal(finished.model, '/configured/standard.gguf');
+  const args = fs.readFileSync(path.join(workspace.root, 'jobs', job.id, 'inference-args.txt'), 'utf8').trim().split('\n');
+  assert.equal(args[args.indexOf('--profile') + 1], 'standard');
+  assert.equal(args[args.indexOf('--steps') + 1], '20');
 });
 
 test('deleting a record removes only its files and rejects running jobs and escaped paths', t => {

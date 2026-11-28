@@ -50,7 +50,8 @@ function setBusy(value) {
   const locked = busy || current.active;
   $('generate').disabled = locked || !current.workspace || selectedId !== null;
   $('generate').classList.toggle('hidden', selectedId !== null);
-  for (const id of ['new-workspace', 'open-workspace', 'open-settings']) $(id).disabled = locked;
+  for (const id of ['new-workspace', 'open-workspace']) $(id).disabled = locked;
+  $('open-settings').disabled = busy || (current.active && !current.maintenance?.running);
   $('new-scene').disabled = locked || !current.workspace;
   $('toggle-view').disabled = busy || !current.workspace;
   const readonly = locked || selectedId !== null || !current.workspace;
@@ -199,7 +200,8 @@ function renderProgress() {
   $('progress-prompt').textContent = job.prompt;
   const sampling = job.stage === 'sampling' && Number.isInteger(job.samplingStep);
   if (progressJob !== job.id) { progressJob = job.id; progressUnits = 0; }
-  const units = { preparing: 1, sampling: 1 + Math.max(0, Math.min(6, job.samplingStep || 0)), decoding: 8, encoding: 9 };
+  const steps = job.steps || 6;
+  const units = { preparing: 1, sampling: 1 + 6 * Math.max(0, Math.min(steps, job.samplingStep || 0)) / steps, decoding: 8, encoding: 9 };
   progressUnits = Math.max(progressUnits, units[job.stage] || 1);
   $('generation-fill').style.width = `${progressUnits * 10}%`;
   $('generation-bar').setAttribute('aria-valuenow', String(progressUnits));
@@ -211,7 +213,7 @@ function renderProgress() {
     element.classList.toggle('is-active', index === phaseIndex);
   }
   $('progress-caption').textContent = sampling
-    ? `采样 ${job.samplingStep} / 6 步，之后还需解码和导出`
+    ? `采样 ${job.samplingStep} / ${steps} 步，之后还需解码和导出`
     : '随实际处理阶段推进，不代表剩余时间';
   $('active-scene').classList.toggle('hidden', selectedId === job.id && !timelineVisible);
   updateElapsed();
@@ -221,6 +223,9 @@ function render(state) {
   const rootChanged = current.workspace?.root !== state.workspace?.root;
   current = state;
   const workspace = state.workspace;
+  const options = state.deploymentOptions;
+  $('deployment-summary').textContent = state.maintenance?.running ? '部署操作正在运行，请等待完成。' :
+    options ? `CUDA · ${options.profile} · ${options.steps} 步 · 24 fps（在设置中修改）` : '';
   $('workspace-name').textContent = workspace?.name || '尚未选择工作区';
   $('workspace-path').textContent = workspace?.root || '创建或打开一个工作区，开始创作。';
   if (rootChanged) {
@@ -283,7 +288,7 @@ function render(state) {
   $('show-video').disabled = !job || job.status !== 'completed';
   $('job-detail').classList.toggle('hidden', !job);
   $('job-detail').textContent = job
-    ? `${statusText(job)} · ${job.width} × ${job.height} · ${job.duration} 秒 · ${job.format.toUpperCase()} · ${job.audio ? '有声' : '无声'} · 种子 ${job.seed}${job.error ? ` · ${job.error}` : ''}`
+    ? `${statusText(job)} · ${job.profile || 'hyperflow'} · ${job.steps || 6} 步 · ${job.width} × ${job.height} · ${job.duration} 秒 · ${job.format.toUpperCase()} · ${job.audio ? '有声' : '无声'} · 种子 ${job.seed}${job.error ? ` · ${job.error}` : ''}`
     : '';
   if (job?.status === 'completed') {
     $('preview-empty').classList.add('hidden');
@@ -385,6 +390,7 @@ window.mmax.onEvent(event => {
   if (event.type === 'error') message(event.message, true);
   refreshState();
 });
+window.mmax.onDeploymentEvent(() => refreshState());
 refreshState();
 setInterval(() => { if (current.active) refreshState(); }, 2000);
 setInterval(updateElapsed, 1000);

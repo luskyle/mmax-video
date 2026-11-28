@@ -19,32 +19,78 @@
   </header>
   <main class="settings-page">
     <div class="settings-heading">
-      <div class="section-label">LOCAL SETUP</div>
-      <h1>本地 MiniMax 配置</h1>
-      <p class="muted">设置本机推理环境目录。配置会保存在应用中，不随工作区变化。</p>
+      <div class="section-label">MINIMAX-DEPLOY · CUDA ONLY</div>
+      <h1>本地部署与生成设置</h1>
+      <p class="muted">配置、检查和维护本机推理环境。所有任务在本机运行，无需云 API Key。</p>
     </div>
     <div id="notice" class="notice hidden" role="status"></div>
     <section class="card settings-panel">
       <h2>安装目录</h2>
-      <p class="muted">选择本地 MiniMax 安装根目录，应用会校验必要文件。</p>
+      <p class="muted">选择包含 generate.sh 和 deploy.py 的 minimax-deploy 根目录。模型尚未下载也可以配置。</p>
       <div class="settings-path-row">
         <div id="model-path" class="settings-path">读取中…</div>
-        <button id="choose-model" class="primary" title="选择并校验 MiniMax 安装目录，成功后自动保存">
+        <button id="choose-model" class="primary" title="切换部署目录会清除当前应用的路径覆盖设置">
           <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 11V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v3M3 11h18l-3 9H5z"/></svg>
           选择目录
         </button>
       </div>
       <p id="model-status" class="model-status" role="status">正在检查目录…</p>
+      <div class="deployment-actions">
+        <button id="refresh" class="secondary">刷新检查</button>
+        <button id="show-readme" class="secondary">部署说明与许可证</button>
+        <button id="show-config" class="secondary">定位部署配置文件</button>
+      </div>
     </section>
     <section class="card settings-panel">
-      <h2>必需文件</h2>
-      <p class="muted">所选目录需包含以下文件：</p>
-      <ul class="requirements">
-        <li><code>generate.sh</code></li>
-        <li><code>deploy.py</code> 及其配置指定的 HyperFlow 模型、文本编码器、VAE 和 CUDA 推理器</li>
-        <li><code>build-deps/root/usr/bin/ffmpeg</code>，或安装在 PATH 中的 FFmpeg</li>
-      </ul>
-      <div class="settings-note">检查使用部署入口的 HyperFlow dry-run，不启动 GPU；显存和驱动状态需另行确认。自定义扩散模型须与 HyperFlow 预设兼容。工作区请放在 MiniMax 安装目录之外。目录选择完成后会自动保存；任务运行期间不能更改。</div>
+      <h2>生成预设</h2>
+      <div class="deployment-grid">
+        <div><label for="profile">模型预设</label><select id="profile"><option value="hyperflow">HyperFlow H3 Flash · 六步蒸馏</option><option value="standard">Standard · 原剪枝模型</option></select></div>
+        <div><label for="steps">采样步数</label><input id="steps" type="number" min="1" max="20" value="6"></div>
+      </div>
+      <p id="profile-help" class="hint"></p>
+      <div id="capabilities" class="settings-note">正在读取部署能力…</div>
+    </section>
+    <section class="card settings-panel">
+      <h2>路径与运行环境</h2>
+      <p class="muted">留空继承启动环境、config.local.json 或部署默认值；相对路径以部署根目录为基准。下方显示的是已保存配置的实际路径。</p>
+      <div id="deployment-fields" class="deployment-grid"></div>
+      <details class="deployment-advanced">
+        <summary>构建与下载环境</summary>
+        <div id="environment-fields" class="deployment-grid"></div>
+      </details>
+      <div class="settings-note">这些覆盖值仅保存在桌面应用，不修改 config.local.json 或系统环境。保存后用于后续生成、检查、构建和下载；CLI／API／MCP 不受影响。自定义扩散模型必须匹配所选预设。共享同一 GPU 的部署应使用相同运行锁目录。</div>
+      <div class="deployment-actions">
+        <button id="save" class="primary">保存应用配置</button>
+        <button id="discard" class="secondary">撤销未保存修改</button>
+        <button id="clear-overrides" class="secondary">清空路径与环境覆盖</button>
+        <span id="save-state" class="muted" role="status"></span>
+      </div>
+    </section>
+    <section class="card settings-panel">
+      <h2>诊断、构建与模型下载</h2>
+      <p class="muted">使用已保存的配置。诊断检查 CUDA 设备、显存、系统内存、磁盘和模型大小；完整校验还会读取所有模型并验证 SHA256。</p>
+      <div class="deployment-actions">
+        <button id="doctor" class="secondary">环境诊断</button>
+        <button id="checksum" class="secondary">完整 SHA256 校验</button>
+      </div>
+      <div class="deployment-grid">
+        <div><label for="build-jobs">构建并行数（低内存建议 2）</label><input id="build-jobs" type="number" min="1" max="256" value="2"></div>
+        <div><label for="download-profile">下载模型</label><select id="download-profile"><option value="hyperflow">HyperFlow</option><option value="standard">Standard</option><option value="all">两套模型（共享编码器和 VAE）</option></select></div>
+      </div>
+      <label class="license-confirm"><input id="accept-license" type="checkbox">我已阅读部署项目 README 中的模型许可证，并确认下载</label>
+      <div class="deployment-actions">
+        <button id="build" class="secondary">构建 CUDA 引擎</button>
+        <button id="download" class="secondary">下载／校验模型</button>
+        <button id="show-log" class="secondary">定位完整操作日志</button>
+      </div>
+      <p class="hint">构建不安装系统软件或驱动；下载支持断点续传和 SHA256 校验，不覆盖损坏模型。下载写入模型目录，不写入单文件覆盖路径。任务运行时禁止修改配置或生成视频，请等待完成后关闭应用。切换设置页面不会中断任务。</p>
+      <p id="operation-status" class="model-status" role="status">尚未执行部署操作。</p>
+      <pre id="operation-log" class="deployment-log" tabindex="0" aria-label="部署操作日志"></pre>
+    </section>
+    <section class="card settings-panel">
+      <h2>连接方式与能力边界</h2>
+      <p class="muted">桌面应用直接使用本地 CLI，不需要 HTTP 服务。部署项目另外提供 HTTP API 和 MCP；其监听地址、鉴权和启动由各自客户端管理，本页不会自动开放网络端口。</p>
+      <p class="hint">首帧、尾帧输入目前通过部署 CLI／HTTP API 使用，创作页暂未提供图片选择。无声选项只在导出时移除音轨。工作区必须位于部署目录之外；旧工作区、视频和历史参数不会因切换预设而改写。</p>
     </section>
   </main>
   <script src="settings.js"></script>

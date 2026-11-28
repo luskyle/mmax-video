@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import workspaceApi from '../src/workspace.js';
+import deployment from '../src/deployment.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -18,8 +19,18 @@ const model = path.join(temporary, 'model');
 fs.mkdirSync(profile, { recursive: true });
 fs.mkdirSync(path.join(model, 'build-deps/root/usr/bin'), { recursive: true });
 fs.writeFileSync(path.join(model, 'deploy.py'),
-  'import json, sys\nassert "--dry-run" in sys.argv and sys.argv[sys.argv.index("--profile") + 1] == "hyperflow"\nprint(json.dumps(["sd-cli", "--diffusion-model", "/configured/hyperflow.gguf"]))\n');
-fs.writeFileSync(path.join(model, 'generate.sh'), '#!/bin/sh\nfor last do :; done\nprintf "raw" > "$last"\n');
+  `import json,sys,os,time
+profile = sys.argv[sys.argv.index("--profile")+1] if "--profile" in sys.argv else "hyperflow"
+if sys.argv[1] == "inspect":
+ print(json.dumps({"schema_version":1,"settings":dict.fromkeys(${JSON.stringify(deployment.PATH_KEYS)}, "/configured/path") | {"profile":profile},"engine_commit":"smoke","capabilities":{"backend":"cuda","fps":24,"width_height":{"min":256,"max":1344,"multiple":32},"frames":{"min":124,"max":345},"max_prompt_characters":7000}}))
+elif sys.argv[1] == "generate":
+ print(json.dumps(["sd-cli","--diffusion-model","/configured/"+profile+".gguf"]))
+else:
+ print("operation", sys.argv[1:], flush=True)
+ print("models", os.environ.get("MINIMAX_H3_MODEL_DIR"), flush=True)
+ time.sleep(1)
+`);
+fs.writeFileSync(path.join(model, 'generate.sh'), '#!/bin/sh\nprintf "%s\\n" "$@" > inference-args.txt\nfor last do :; done\nprintf "raw" > "$last"\n');
 fs.writeFileSync(path.join(model, 'build-deps/root/usr/bin/ffmpeg'),
   '#!/bin/sh\nif [ "$1" = "-version" ]; then exit 0; fi\nfor last do :; done\nprintf "video" > "$last"\n', { mode: 0o755 });
 const workspace = workspaceApi.createWorkspace(temporary, 'Smoke test', model);
@@ -106,8 +117,70 @@ try {
   await page.locator('#open-settings').click();
   await page.waitForFunction(() => document.getElementById('model-status')?.classList.contains('ready'));
   assert.match(await page.locator('#model-status').textContent(), /\/configured\/hyperflow\.gguf/);
+  await page.locator('#profile').selectOption('standard');
+  assert.equal(await page.locator('#steps').inputValue(), '20');
+  assert.equal(await page.locator('#steps').isDisabled(), false);
+  await page.locator('#steps').fill('12');
+  await page.locator('#MINIMAX_H3_MODEL_DIR').fill('custom-models');
+  assert.equal(await page.locator('#doctor').isDisabled(), true);
+  await page.locator('#save').click();
+  await page.waitForFunction(() => document.getElementById('save-state')?.textContent === '已保存');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'model-root.json'), 'utf8')).options.steps, 12);
+  await page.locator('#doctor').click();
+  assert.equal(await page.locator('#save').isDisabled(), true);
+  assert.equal(await page.locator('#choose-model').isDisabled(), true);
+  const blocked = await page.evaluate(async () => {
+    try { await window.mmax.start('blocked', { width: 640, height: 384, seed: -1 }); return ''; }
+    catch (error) { return error.message; }
+  });
+  assert.match(blocked, /正在运行/);
+  await page.locator('#back').click();
+  await page.locator('#open-settings').click();
+  await page.waitForFunction(() => document.getElementById('operation-status')?.textContent.includes('完成'));
+  assert.match(await page.locator('#operation-log').textContent(), /custom-models/);
+  assert.equal(await page.locator('#download').isDisabled(), true);
+  await page.locator('#profile').selectOption('hyperflow');
+  assert.equal(await page.locator('#steps').inputValue(), '6');
+  assert.equal(await page.locator('#steps').isDisabled(), true);
+  await page.locator('#discard').click();
+  assert.equal(await page.locator('#profile').inputValue(), 'standard');
   await page.locator('#back').click();
   await page.waitForSelector('#toggle-view');
+  assert.match(await page.locator('#deployment-summary').textContent(), /standard.*12/);
+  await page.locator('#new-scene').click();
+  await page.locator('#prompt').fill('Standard scene');
+  await page.locator('#generate').click();
+  await page.waitForFunction(() => document.getElementById('scene-status')?.textContent.includes('已完成'));
+  const standard = workspaceApi.loadJobs(workspace).find(job => job.prompt === 'Standard scene');
+  assert.equal(standard.profile, 'standard');
+  assert.equal(standard.steps, 12);
+  const inferenceArgs = fs.readFileSync(path.join(workspace.root, 'jobs', standard.id, 'inference-args.txt'), 'utf8').trim().split('\n');
+  assert.equal(inferenceArgs[inferenceArgs.indexOf('--profile') + 1], 'standard');
+  assert.equal(inferenceArgs[inferenceArgs.indexOf('--steps') + 1], '12');
+  await page.locator('#open-settings').click();
+  await page.waitForFunction(() => document.getElementById('profile')?.value === 'standard');
+  assert.equal(await page.locator('#steps').inputValue(), '12');
+  assert.equal(await page.locator('#MINIMAX_H3_MODEL_DIR').inputValue(), 'custom-models');
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); });
+  await page.locator('#build').click();
+  await page.waitForFunction(() => document.getElementById('operation-status')?.textContent.includes('完成'));
+  assert.match(await page.locator('#operation-log').textContent(), /build.*--jobs.*2/);
+  await page.locator('#accept-license').check();
+  await page.locator('#download-profile').selectOption('all');
+  await page.locator('#download').click();
+  await page.waitForFunction(() => document.getElementById('operation-status')?.textContent.includes('完成'));
+  assert.match(await page.locator('#operation-log').textContent(), /download.*all.*--accept-license/);
+  await application.close();
+  application = await electron.launch({
+    executablePath: binary, args: ['--disable-gpu', '--force-device-scale-factor=1'],
+    env: { ...process.env, XDG_CONFIG_HOME: config }, timeout: 30000
+  });
+  const restarted = await application.firstWindow();
+  restarted.on('pageerror', error => errors.push(error.message));
+  await restarted.locator('#open-settings').click();
+  await restarted.waitForFunction(() => document.getElementById('profile')?.value === 'standard');
+  assert.equal(await restarted.locator('#steps').inputValue(), '12');
+  assert.equal(await restarted.locator('#MINIMAX_H3_MODEL_DIR').inputValue(), 'custom-models');
   assert.deepEqual(errors, [], 'packaged renderer must not throw');
   console.log('Packaged Electron smoke test passed: legacy records, validated generation, canvas, draft and settings.');
 } finally {
