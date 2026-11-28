@@ -15,8 +15,8 @@ function renderStatus(status) {
   const output = $('model-status');
   const ready = status.missing.length === 0;
   output.textContent = ready
-    ? '已就绪：必要文件均已找到。'
-    : `未就绪，缺少：${status.missing.join('；')}`;
+    ? `已就绪：部署检查通过。模型：${status.files.model}；FFmpeg：${status.files.ffmpeg}`
+    : `未就绪：${status.missing.join('；')}`;
   output.classList.toggle('ready', ready);
   output.classList.toggle('error', !ready);
 }

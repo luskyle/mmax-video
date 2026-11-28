@@ -1,9 +1,10 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
 const MARKER = '.mmax-workspace.json';
@@ -21,18 +22,21 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function validateSettings(settings) {
+function validateSettings(settings, forGeneration = false) {
   if (!settings || typeof settings !== 'object') throw new Error('生成设置无效。');
+  const maxSize = forGeneration ? 1344 : 1920;
   for (const key of ['width', 'height']) {
-    if (!Number.isInteger(settings[key]) || settings[key] < 256 || settings[key] > 1920 || settings[key] % 32 !== 0) {
-      throw new Error('宽度和高度必须是 256 到 1920 之间的 32 的倍数。');
+    if (!Number.isInteger(settings[key]) || settings[key] < 256 || settings[key] > maxSize || settings[key] % 32 !== 0) {
+      throw new Error(`宽度和高度必须是 256 到 ${maxSize} 之间的 32 的倍数。`);
     }
   }
   if (!Number.isInteger(settings.seed) || settings.seed < -1 || settings.seed > 2147483647) {
     throw new Error('种子必须是 -1 或 0 到 2147483647 之间的整数。');
   }
   const { duration = DEFAULTS.duration, format = DEFAULTS.format, audio = DEFAULTS.audio } = settings;
-  if (![5, 10, 15].includes(duration)) throw new Error('视频时长必须为 5、10 或 15 秒。');
+  if (!(forGeneration ? [5, 10, 14] : [5, 10, 14, 15]).includes(duration)) {
+    throw new Error(forGeneration ? '视频时长必须为 5、10 或 14 秒；旧的 15 秒记录仍可查看。' : '视频时长无效。');
+  }
   if (!['webm', 'mp4'].includes(format)) throw new Error('视频格式必须为 WebM 或 MP4。');
   if (typeof audio !== 'boolean') throw new Error('音频设置无效。');
   return { width: settings.width, height: settings.height, seed: settings.seed, duration, format, audio };
@@ -43,10 +47,47 @@ function framesForDuration(duration) {
 }
 
 function validatePrompt(prompt) {
-  if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 4000) {
-    throw new Error('请输入 1 到 4000 个字符的提示词。');
+  if (typeof prompt !== 'string' || !prompt.trim() || [...prompt].length > 7000) {
+    throw new Error('请输入 1 到 7000 个字符的提示词。');
   }
   return prompt.trim();
+}
+
+function isFile(file, executable = false) {
+  try {
+    if (!fs.statSync(file).isFile()) return false;
+    if (executable) fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR', 'EACCES'].includes(error.code)) return false;
+    throw error;
+  }
+}
+
+function ffmpegEnvironment(root, ffmpeg, tmpdir) {
+  const env = { ...process.env };
+  if (tmpdir) env.TMPDIR = tmpdir;
+  if (ffmpeg === path.join(root, 'build-deps/root/usr/bin/ffmpeg')) {
+    const libs = path.join(root, 'build-deps/root/usr/lib/x86_64-linux-gnu');
+    env.LD_LIBRARY_PATH = [libs, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+  }
+  return env;
+}
+
+function findFfmpeg(root) {
+  const bundled = path.join(root, 'build-deps/root/usr/bin/ffmpeg');
+  const candidates = new Set([bundled, ...(process.env.PATH || '').split(path.delimiter).filter(Boolean).map(dir => path.resolve(dir, 'ffmpeg'))]);
+  const failures = [];
+  for (const file of candidates) {
+    if (!isFile(file, true)) continue;
+    const result = spawnSync(file, ['-version'], { cwd: root, env: ffmpegEnvironment(root, file), encoding: 'utf8', timeout: 5000 });
+    if (!result.error && result.status === 0) return { file };
+    failures.push(`${file}：${result.error ? result.error.message : result.stderr.trim() || (result.signal ? `信号 ${result.signal}` : `退出码 ${result.status}`)}`);
+  }
+  return {
+    file: null,
+    error: failures.length ? `FFmpeg 无法运行：${failures.join('；')}` : 'FFmpeg（请安装到 PATH 或放入 build-deps/root/usr/bin/ffmpeg）'
+  };
 }
 
 function inspectModelRoot(modelRoot) {
@@ -59,18 +100,35 @@ function inspectModelRoot(modelRoot) {
     }
     throw error;
   }
+  const ffmpeg = findFfmpeg(root);
   const files = {
     script: path.join(root, 'generate.sh'),
-    model: path.join(root, 'models/diffusion_models/minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf'),
-    ffmpeg: path.join(root, 'build-deps/root/usr/bin/ffmpeg')
+    deploy: path.join(root, 'deploy.py'),
+    ffmpeg: ffmpeg.file
   };
   const missing = [];
-  for (const file of Object.values(files)) {
-    try {
-      if (!fs.statSync(file).isFile()) missing.push(file);
-    } catch (error) {
-      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') missing.push(file);
-      else throw error;
+  for (const file of [files.script, files.deploy]) {
+    if (!isFile(file)) missing.push(file);
+  }
+  if (!files.ffmpeg) missing.push(ffmpeg.error);
+  if (isFile(files.script) && isFile(files.deploy)) {
+    const output = path.join(os.tmpdir(), `mmax-check-${crypto.randomUUID()}.webm`);
+    const result = spawnSync('python3', [files.deploy, 'generate', 'MMax deployment check', output, '--profile', 'hyperflow', '--dry-run'], {
+      cwd: root, env: { ...process.env, MINIMAX_H3_BACKEND: 'cuda' }, encoding: 'utf8', timeout: 10000
+    });
+    if (result.error) {
+      missing.push(`部署检查无法运行：${result.error.message}`);
+    } else if (result.status !== 0) {
+      missing.push(`部署检查失败：${result.stderr.trim() || result.stdout.trim() || (result.signal ? `信号 ${result.signal}` : `退出码 ${result.status}`)}`);
+    } else {
+      try {
+        const command = JSON.parse(result.stdout);
+        const index = Array.isArray(command) ? command.indexOf('--diffusion-model') : -1;
+        if (index < 0 || typeof command[index + 1] !== 'string') missing.push('部署检查未返回扩散模型路径。');
+        else files.model = command[index + 1];
+      } catch (error) {
+        missing.push(`部署检查返回无效结果：${error.message}`);
+      }
     }
   }
   return { root, files, missing };
@@ -117,7 +175,7 @@ function createWorkspace(parent, name, modelRoot) {
 }
 
 function saveSettings(workspace, settings) {
-  settings = validateSettings(settings);
+  settings = validateSettings(settings, true);
   writeJson(path.join(workspace.root, MARKER), { version: 1, name: workspace.name, settings });
   workspace.settings = settings;
   return settings;
@@ -199,6 +257,7 @@ function runProcess(command, args, options, log, onOutput, onPid) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, options);
     let processError;
+    let stderr = '';
     const fail = error => {
       if (!processError) processError = error;
       if (child.pid && child.exitCode === null && child.signalCode === null) child.kill();
@@ -209,6 +268,7 @@ function runProcess(command, args, options, log, onOutput, onPid) {
       stream.on('data', chunk => {
         try {
           log.write(chunk);
+          if (stream === child.stderr) stderr = (stderr + chunk.toString('utf8')).slice(-4096);
           onOutput(chunk.toString('utf8'));
         } catch (error) {
           fail(error);
@@ -218,7 +278,11 @@ function runProcess(command, args, options, log, onOutput, onPid) {
     child.on('close', (code, signal) => {
       if (processError) reject(processError);
       else if (code === 0) resolve();
-      else reject(new Error(`进程失败（${signal ? `信号 ${signal}` : `退出码 ${code}`}），请查看任务日志。`));
+      else {
+        const details = stderr.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/[\r\n]+/)
+          .map(line => line.trim()).filter(Boolean).slice(-3).join('；');
+        reject(new Error(`进程失败（${signal ? `信号 ${signal}` : `退出码 ${code}`}）${details ? `：${details}。` : '，请查看任务日志。'}`));
+      }
     });
     try { onPid(child.pid); } catch (error) { fail(error); }
   });
@@ -238,8 +302,8 @@ class Generator {
       throw new Error('此工作区的前一个任务仍在运行，请等待其结束后重新打开工作区。');
     }
     prompt = validatePrompt(prompt);
-    const settings = validateSettings(input);
-    const { script, model, ffmpeg } = modelFiles(this.modelRoot);
+    const settings = validateSettings(input, true);
+    const { root: modelRoot, script, ffmpeg } = modelFiles(this.modelRoot);
     const id = crypto.randomUUID();
     const dir = jobDir(workspace, id);
     fs.mkdirSync(dir);
@@ -249,14 +313,14 @@ class Generator {
     };
     writeJson(path.join(dir, 'job.json'), job);
     this.active = true;
-    this.execute(workspace, job, dir, script, model, ffmpeg).catch(error => {
+    this.execute(workspace, job, dir, modelRoot, script, ffmpeg).catch(error => {
       console.error('Unable to finalize generation:', error);
       this.notify({ type: 'error', message: `任务状态保存失败：${error.message}` });
     }).finally(() => { this.active = false; this.notify({ type: 'changed' }); });
     return job;
   }
 
-  async execute(workspace, job, dir, script, model, ffmpeg) {
+  async execute(workspace, job, dir, modelRoot, script, ffmpeg) {
     const metadata = path.join(dir, 'job.json');
     const log = fs.createWriteStream(path.join(dir, 'generation.log'), { flags: 'a' });
     let logError;
@@ -292,18 +356,16 @@ class Generator {
     const raw = path.join(dir, 'original.webm');
     const final = path.join(dir, videoFilename(job));
     try {
-      const env = { ...process.env, MINIMAX_H3_BACKEND: 'cuda', MINIMAX_H3_DIFFUSION_MODEL: model, TMPDIR: dir };
-      await runProcess('bash', [script, job.prompt, raw, '--width', String(job.width), '--height', String(job.height),
-        '--video-frames', String(job.frames), '--fps', String(FPS),
-        '--seed', String(job.seed), '--steps', '6', '--sampling-method', 'euler', '--sigmas', 'hyperflow-h3-flash-6'],
+      const env = { ...process.env, MINIMAX_H3_BACKEND: 'cuda', TMPDIR: dir };
+      await runProcess('bash', [script, '--profile', 'hyperflow', '--width', String(job.width), '--height', String(job.height),
+        '--video-frames', String(job.frames), '--seed', String(job.seed), '--', job.prompt, raw],
       { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] }, log, onOutput, setPid);
       if (logError) throw logError;
       if (!fs.existsSync(raw) || fs.statSync(raw).size === 0) throw new Error('推理结束但没有生成视频。');
       job.phase = `导出 ${job.format.toUpperCase()}${job.audio ? '（含声音）' : '（仅画面）'}`;
       job.stage = 'encoding';
       update();
-      const libs = path.join(this.modelRoot, 'build-deps/root/usr/lib/x86_64-linux-gnu');
-      const ffenv = { ...process.env, LD_LIBRARY_PATH: [libs, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':'), TMPDIR: dir };
+      const ffenv = ffmpegEnvironment(modelRoot, ffmpeg, dir);
       const videoArgs = job.format === 'mp4'
         ? ['-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
         : ['-c:v', 'copy'];

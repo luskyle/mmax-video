@@ -42,7 +42,7 @@ function updatePreset() {
 }
 
 function updatePromptCount() {
-  $('prompt-count').textContent = `${$('prompt').value.length} / 4000`;
+  $('prompt-count').textContent = `${[...$('prompt').value].length} / 7000`;
 }
 
 function setBusy(value) {

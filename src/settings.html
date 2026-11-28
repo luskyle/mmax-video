@@ -41,10 +41,10 @@
       <p class="muted">所选目录需包含以下文件：</p>
       <ul class="requirements">
         <li><code>generate.sh</code></li>
-        <li><code>models/diffusion_models/minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf</code></li>
-        <li><code>build-deps/root/usr/bin/ffmpeg</code></li>
+        <li><code>deploy.py</code> 及其配置指定的 HyperFlow 模型、文本编码器、VAE 和 CUDA 推理器</li>
+        <li><code>build-deps/root/usr/bin/ffmpeg</code>，或安装在 PATH 中的 FFmpeg</li>
       </ul>
-      <div class="settings-note">工作区请放在 MiniMax 安装目录之外。目录选择完成后会自动保存；任务运行期间不能更改。</div>
+      <div class="settings-note">检查使用部署入口的 HyperFlow dry-run，不启动 GPU；显存和驱动状态需另行确认。自定义扩散模型须与 HyperFlow 预设兼容。工作区请放在 MiniMax 安装目录之外。目录选择完成后会自动保存；任务运行期间不能更改。</div>
     </section>
   </main>
   <script src="settings.js"></script>

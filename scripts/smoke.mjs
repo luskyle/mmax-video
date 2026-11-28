@@ -16,11 +16,12 @@ const config = path.join(temporary, 'config');
 const profile = path.join(config, 'mmax-video');
 const model = path.join(temporary, 'model');
 fs.mkdirSync(profile, { recursive: true });
-for (const name of ['generate.sh', 'models/diffusion_models/minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf', 'build-deps/root/usr/bin/ffmpeg']) {
-  const file = path.join(model, name);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, '');
-}
+fs.mkdirSync(path.join(model, 'build-deps/root/usr/bin'), { recursive: true });
+fs.writeFileSync(path.join(model, 'deploy.py'),
+  'import json, sys\nassert "--dry-run" in sys.argv and sys.argv[sys.argv.index("--profile") + 1] == "hyperflow"\nprint(json.dumps(["sd-cli", "--diffusion-model", "/configured/hyperflow.gguf"]))\n');
+fs.writeFileSync(path.join(model, 'generate.sh'), '#!/bin/sh\nfor last do :; done\nprintf "raw" > "$last"\n');
+fs.writeFileSync(path.join(model, 'build-deps/root/usr/bin/ffmpeg'),
+  '#!/bin/sh\nif [ "$1" = "-version" ]; then exit 0; fi\nfor last do :; done\nprintf "video" > "$last"\n', { mode: 0o755 });
 const workspace = workspaceApi.createWorkspace(temporary, 'Smoke test', model);
 fs.writeFileSync(path.join(profile, 'model-root.json'), JSON.stringify({ root: model }));
 fs.writeFileSync(path.join(profile, 'last-workspace.json'), JSON.stringify({ root: workspace.root }));
@@ -29,7 +30,8 @@ for (let index = 0; index < 6; index++) {
   const dir = path.join(workspace.root, 'jobs', id);
   fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify({
-    ...workspace.settings, id, prompt: `Smoke scene ${index + 1}`, status: 'failed',
+    ...workspace.settings, ...(index === 0 ? { width: 1920, duration: 15 } : {}),
+    id, prompt: `Smoke scene ${index + 1}`, status: 'failed',
     error: 'Smoke fixture: no GPU inference is performed.', createdAt: new Date(1700000000000 + index * 1000).toISOString()
   }));
 }
@@ -73,17 +75,41 @@ try {
   await page.locator('#canvas-fit').click();
   await page.locator('.timeline-open').first().click();
   assert.equal(await page.locator('#prompt').inputValue(), 'Smoke scene 1');
+  assert.equal(await page.locator('#width').inputValue(), '1920');
+  assert.equal(await page.locator('#duration').inputValue(), '15');
+  assert.equal(await page.locator('#width').getAttribute('max'), '1344');
+  assert.equal(await page.locator('#duration option[value="15"]').isDisabled(), true);
   await page.locator('#new-scene').click();
+  await page.locator('#prompt').fill('test');
+  await page.locator('#width').fill('1376');
+  await page.locator('#generate').click();
+  assert.match(await page.locator('#notice').textContent(), /1344/);
+  await page.locator('#width').fill('640');
+  await page.locator('#prompt').fill('🦊'.repeat(7000));
+  assert.equal(await page.locator('#prompt-count').textContent(), '7000 / 7000');
+  assert.equal((await page.locator('#prompt').inputValue()).length, 14000);
+  await page.locator('#prompt').fill('x'.repeat(7001));
+  assert.equal(await page.locator('#prompt-count').textContent(), '7001 / 7000');
+  await page.locator('#generate').click();
+  assert.match(await page.locator('#notice').textContent(), /7000/);
   await page.locator('#prompt').fill('Keep my draft');
   await page.locator('#toggle-view').click();
   await page.locator('#toggle-view').click();
   assert.equal(await page.locator('#prompt').inputValue(), 'Keep my draft');
+  await page.locator('#duration').selectOption('14');
+  await page.locator('#generate').click();
+  await page.waitForFunction(() => document.getElementById('scene-status')?.textContent.includes('已完成'));
+  const generated = workspaceApi.loadJobs(workspace).find(job => job.prompt === 'Keep my draft');
+  assert.equal(generated.duration, 14);
+  assert.equal(generated.frames, 345);
+  assert.equal(generated.status, 'completed');
   await page.locator('#open-settings').click();
   await page.waitForFunction(() => document.getElementById('model-status')?.classList.contains('ready'));
+  assert.match(await page.locator('#model-status').textContent(), /\/configured\/hyperflow\.gguf/);
   await page.locator('#back').click();
   await page.waitForSelector('#toggle-view');
   assert.deepEqual(errors, [], 'packaged renderer must not throw');
-  console.log('Packaged Electron smoke test passed: isolated workspace, canvas, drag/zoom, scene navigation, draft and settings.');
+  console.log('Packaged Electron smoke test passed: legacy records, validated generation, canvas, draft and settings.');
 } finally {
   try { if (application) await application.close(); }
   finally { fs.rmSync(temporary, { recursive: true, force: true }); }
